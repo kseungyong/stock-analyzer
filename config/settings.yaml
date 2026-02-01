@@ -1,0 +1,30 @@
+email:
+  password: ''
+  recipients:
+  - recipient@example.com
+  sender: ''
+  smtp_port: 587
+  smtp_server: smtp.gmail.com
+schedule:
+  hour: 8
+  minute: 30
+  timezone: Asia/Seoul
+stocks:
+  korea:
+  - name: 삼성전자
+    symbol: 005930.KS
+  - name: SK하이닉스
+    symbol: 000660.KS
+  - name: 현대자동차
+    symbol: 005380.KS
+  us:
+  - name: Apple
+    symbol: AAPL
+  - name: NVIDIA
+    symbol: NVDA
+  - name: Tesla
+    symbol: TSLA
+  - name: 아이온큐
+    symbol: ionq
+  - name: 마이크로소프트
+    symbol: msft
