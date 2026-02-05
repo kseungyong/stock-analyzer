@@ -14,6 +14,7 @@ from src.ml_predictor import run_prediction
 from src.report_generator import generate_report
 from src.email_sender import send_report
 from src.scheduler import start_scheduler
+from src.validators import validate_stock_symbol, sanitize_stock_symbol
 
 
 CONFIG_PATH = Path(__file__).parent / "config" / "settings.yaml"
@@ -32,7 +33,21 @@ def get_all_stocks(config: dict) -> list[dict]:
 
 
 def analyze_stock(symbol: str, name: str) -> dict | None:
-    """단일 종목 분석을 수행한다."""
+    """단일 종목 분석을 수행한다.
+
+    Args:
+        symbol: 주식 심볼 (예: AAPL, 005930.KS)
+        name: 종목명
+
+    Returns:
+        분석 결과 딕셔너리 또는 실패 시 None
+    """
+    # 입력 검증
+    symbol = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(symbol):
+        print(f"  [ERROR] 유효하지 않은 심볼: {symbol}")
+        return None
+
     try:
         df = fetch_stock_data(symbol)
         df = compute_indicators(df)

@@ -10,3 +10,4 @@ flask>=3.0.0
 lightgbm>=4.0.0
 tensorflow>=2.15.0
 deep-translator>=1.11.0
+python-dotenv>=1.0.0

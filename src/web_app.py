@@ -9,6 +9,8 @@ from pathlib import Path
 import yaml
 from flask import Flask, request, redirect, url_for, jsonify
 
+from src.validators import validate_stock_symbol, sanitize_stock_symbol
+
 app = Flask(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
@@ -218,6 +220,11 @@ def index():
 
 @app.route("/analyze/<path:symbol>")
 def analyze(symbol: str):
+    # 입력 검증
+    symbol = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(symbol):
+        return _page("오류", f'<div class="card"><p style="color:#dc3545;">유효하지 않은 심볼: {symbol}</p></div>')
+
     config = _load_config()
     name = symbol
     for s in _get_all_stocks(config):
@@ -335,8 +342,17 @@ def stocks_add():
     if not symbol or not name:
         return redirect(url_for("index"), code=303)
 
+    # 심볼 정리 및 검증
+    symbol = sanitize_stock_symbol(symbol)
+
+    # 한국 시장의 경우 .KS/.KQ 자동 추가
     if market == "korea" and not symbol.endswith((".KS", ".KQ")):
         symbol = symbol + ".KS"
+
+    # 검증
+    if not validate_stock_symbol(symbol):
+        # 검증 실패 시 리다이렉트 (에러 메시지는 생략, 단순 무시)
+        return redirect(url_for("index"), code=303)
 
     config = _load_config()
     if market not in config.get("stocks", {}):
@@ -364,5 +380,12 @@ def stocks_delete():
     return redirect(url_for("index"), code=303)
 
 
-def run_web(host: str = "0.0.0.0", port: int = 8080, debug: bool = True):
+def run_web(host: str = "0.0.0.0", port: int = 8080, debug: bool = False):
+    """Flask 웹 서버를 실행한다.
+
+    Args:
+        host: 바인딩 호스트 (기본: 0.0.0.0)
+        port: 바인딩 포트 (기본: 8080)
+        debug: 디버그 모드 (기본: False, 보안상 프로덕션에서는 False 권장)
+    """
     app.run(host=host, port=port, debug=debug)

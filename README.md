@@ -57,8 +57,24 @@ python main.py --start-scheduler
 
 ## 설정
 
-`config/settings.yaml`에서 종목, 스케줄, 이메일을 설정합니다.
+### 이메일 인증정보 (권장: 환경변수 사용)
 
+보안을 위해 이메일 인증정보는 `.env` 파일에 설정하는 것을 권장합니다.
+
+**1. .env 파일 생성:**
+```bash
+cp .env.example .env
+```
+
+**2. .env 파일 편집:**
+```bash
+EMAIL_SENDER=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password
+```
+
+> Gmail 앱 비밀번호 생성: https://support.google.com/accounts/answer/185833
+
+**대안: settings.yaml 사용** (권장하지 않음)
 ```yaml
 email:
   sender: your@gmail.com
@@ -67,11 +83,25 @@ email:
     - recipient@example.com
   smtp_server: smtp.gmail.com
   smtp_port: 587
+```
 
+### 종목 및 스케줄 설정
+
+`config/settings.yaml`에서 종목과 스케줄을 설정합니다.
+
+```yaml
 schedule:
   hour: 8
   minute: 30
   timezone: Asia/Seoul
+
+stocks:
+  korea:
+    - name: 삼성전자
+      symbol: 005930.KS
+  us:
+    - name: Apple
+      symbol: AAPL
 ```
 
 ## 기술 스택
