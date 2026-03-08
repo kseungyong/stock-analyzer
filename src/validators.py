@@ -1,6 +1,22 @@
 """입력 검증 유틸리티."""
 import re
 
+NAME_MAX_LEN = 50  # 종목명 최대 길이
+
+
+def validate_stock_name(name: str) -> bool:
+    """종목명의 유효성을 검증한다.
+
+    Args:
+        name: 검증할 종목명
+
+    Returns:
+        유효한 이름이면 True, 아니면 False
+    """
+    if not name or not isinstance(name, str):
+        return False
+    return 1 <= len(name.strip()) <= NAME_MAX_LEN
+
 
 def validate_stock_symbol(symbol: str) -> bool:
     """주식 심볼의 유효성을 검증한다.

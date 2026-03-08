@@ -151,7 +151,6 @@ def generate_report(analyses: list[dict]) -> str:
                 "<td style='padding:4px 8px;' colspan='2'>예측 불가</td></tr>"
             )
 
-        # --- NEW: Transformer ---
         transformer = pred.get("transformer", {})
         if transformer and "error" not in transformer:
             ml_rows += (
@@ -195,7 +194,6 @@ def generate_report(analyses: list[dict]) -> str:
                     news_li += f'<li style="margin:6px 0;">{safe_title}{pub_tag}{summary_html}</li>'
             news_html = f'<h4 style="margin:12px 0 4px;">관련 뉴스</h4><ul style="font-size:0.9em; padding-left:20px;">{news_li}</ul>'
 
-        # --- NEW: 감성 분석 표시 ---
         sentiment = item.get("sentiment", {})
         sentiment_html = ""
         if sentiment:

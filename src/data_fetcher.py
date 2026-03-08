@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import yfinance as yf
 import pandas as pd
 import re
@@ -26,27 +27,38 @@ def _translate(text: str) -> str:
         return text
 
 
-def fetch_stock_data(symbol: str, period_days: int = 365) -> pd.DataFrame:
+def fetch_stock_data(symbol: str, period_days: int = 365, retries: int = 2) -> pd.DataFrame:
     """주가 데이터를 yfinance로 수집한다.
 
     Args:
         symbol: 종목 코드 (예: '005930.KS', 'AAPL')
         period_days: 수집할 과거 일수
+        retries: 실패 시 재시도 횟수
 
     Returns:
         OHLCV 데이터프레임
     """
     end = datetime.now()
     start = end - timedelta(days=period_days)
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(start=start, end=end)
-    if df.empty:
-        raise ValueError(f"No data found for {symbol}")
-    df.index = pd.to_datetime(df.index).tz_localize(None)
-    return df
+    last_exc: Exception = ValueError(f"No data found for {symbol}")
+
+    for attempt in range(retries + 1):
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(start=start, end=end)
+            if df.empty:
+                raise ValueError(f"No data found for {symbol}")
+            df.index = pd.to_datetime(df.index).tz_localize(None)
+            return df
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(1)
+
+    raise last_exc
 
 
-def fetch_news(symbol: str, max_items: int = 5) -> list[dict]:
+def fetch_news(symbol: str, max_items: int = 10) -> list[dict]:
     """yfinance에서 종목 관련 뉴스를 수집한다.
 
     Returns:

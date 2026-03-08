@@ -4,10 +4,11 @@
 
 ## 주요 기능
 
-- **기술적 분석**: 이동평균(MA5/20/60), RSI, MACD, 볼린저 밴드 기반 매매 신호 생성
-- **ML 예측**: Prophet, Random Forest, LightGBM, LSTM 앙상블 예측
-- **HTML 리포트**: 차트 포함 종합 분석 리포트 자동 생성
-- **웹 대시보드**: Flask 기반 실시간 분석 대시보드
+- **기술적 분석**: 이동평균(MA5/20/60), RSI, MACD, 볼린저 밴드, 거래량 분석 기반 매매 신호 생성
+- **ML 앙상블 예측**: Prophet, Random Forest, LightGBM, LSTM, Transformer 5종 모델
+- **뉴스 감성 분석**: FinBERT(ProsusAI/finbert)로 영문 뉴스 긍정/부정/중립 분류
+- **HTML 리포트**: 차트 포함 종합 분석 리포트 자동 생성 및 다운로드
+- **웹 대시보드**: Flask 기반 실시간 분석 대시보드 (종목 추가/삭제, 백그라운드 분석)
 - **스케줄러**: 매일 지정 시간 자동 분석 및 이메일 발송
 - **뉴스**: 관련 뉴스 수집 및 한국어 자동 번역
 
@@ -48,6 +49,7 @@ python main.py --web
 python main.py --web --port 3000
 ```
 `http://localhost:8080` 에서 대시보드에 접속하여 종목 추가/삭제 및 실시간 분석을 실행할 수 있습니다.
+분석 완료 후 결과 페이지에서 HTML 리포트를 다운로드할 수 있습니다.
 
 ### 일일 자동 분석 (스케줄러)
 ```bash
@@ -110,7 +112,8 @@ stocks:
 |------|-----------|
 | 데이터 수집 | yfinance, deep-translator |
 | 기술적 분석 | ta (TA-Lib) |
-| ML/예측 | Prophet, scikit-learn, LightGBM, TensorFlow (LSTM) |
+| ML 예측 | Prophet, scikit-learn, LightGBM, TensorFlow (LSTM), PyTorch (Transformer) |
+| 감성 분석 | HuggingFace Transformers (FinBERT) |
 | 시각화 | matplotlib |
 | 웹 | Flask |
 | 스케줄링 | APScheduler |
@@ -122,11 +125,13 @@ stock-analyzer/
 ├── main.py                    # CLI 진입점
 ├── config/settings.yaml       # 종목/스케줄/이메일 설정
 ├── requirements.txt
+├── tests/                     # 단위 테스트
 └── src/
-    ├── data_fetcher.py        # 주가 데이터 및 뉴스 수집
-    ├── technical_analysis.py  # 기술적 지표 및 매매 신호
-    ├── ml_predictor.py        # ML 앙상블 예측
+    ├── data_fetcher.py        # 주가 데이터 및 뉴스 수집 (재시도 포함)
+    ├── technical_analysis.py  # 기술적 지표 및 매매 신호 (거래량 포함)
+    ├── ml_predictor.py        # ML 앙상블 예측 + FinBERT 감성 분석
     ├── report_generator.py    # HTML 리포트 생성
+    ├── validators.py          # 입력 검증 유틸리티
     ├── email_sender.py        # 이메일 발송
     ├── scheduler.py           # 일일 자동 실행
     └── web_app.py             # Flask 웹 대시보드

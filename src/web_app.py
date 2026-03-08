@@ -10,7 +10,7 @@ import yaml
 from flask import Flask, request, redirect, url_for, jsonify, Response
 from markupsafe import escape
 
-from src.validators import validate_stock_symbol, sanitize_stock_symbol
+from src.validators import validate_stock_symbol, validate_stock_name, sanitize_stock_symbol
 
 app = Flask(__name__)
 
@@ -20,6 +20,8 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _JOBS_MAX = 50  # 완료된 작업 보관 최대 개수
+
+_config_lock = threading.Lock()  # settings.yaml 동시 쓰기 방지
 
 
 def _jobs_set(job_id: str, **kwargs) -> None:
@@ -52,8 +54,9 @@ def _load_config() -> dict:
 
 
 def _save_config(config: dict) -> None:
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+    with _config_lock:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
 
 
 def _get_all_stocks(config: dict) -> list[dict]:
@@ -176,7 +179,7 @@ def index():
     running = [j for j in jobs.values() if j["status"] == "running"]
     running_banner = ""
     if running:
-        items = ", ".join(j["name"] for j in running)
+        items = ", ".join(escape(j["name"]) for j in running)
         running_banner = f"""
         <div class="card" style="border-left:4px solid #0066cc;">
             <span class="spinner"></span>
@@ -202,8 +205,8 @@ def index():
         cards.append(f"""
         <div class="card">
             <span class="badge {badge_cls}">{market_label}</span>
-            <h3 style="margin:8px 0 4px;">{s['name']}</h3>
-            <p style="color:#666; font-size:0.9em;">{s['symbol']}</p>
+            <h3 style="margin:8px 0 4px;">{escape(s['name'])}</h3>
+            <p style="color:#666; font-size:0.9em;">{escape(s['symbol'])}</p>
             <div style="margin-top:10px; display:flex; gap:6px;">
                 {analyze_btn}
                 <form method="post" action="/stocks/delete" style="margin:0;"
@@ -355,7 +358,7 @@ def job_detail(job_id: str):
         return _page(f"{job['name']} 분석 중", body, refresh)
 
     if job["status"] == "error":
-        return _page("분석 실패", f'<div class="card"><p style="color:#dc3545;">{job["error"]}</p></div>')
+        return _page("분석 실패", f'<div class="card"><p style="color:#dc3545;">{escape(job["error"])}</p></div>')
 
     download_btn = (
         f'<div style="margin-bottom:12px;">'
@@ -395,6 +398,9 @@ def stocks_add():
 
     if not symbol or not name:
         return redirect(url_for("index", error="심볼과 종목명을 모두 입력하세요."), code=303)
+
+    if not validate_stock_name(name):
+        return redirect(url_for("index", error=f"종목명은 1-50자 이내여야 합니다."), code=303)
 
     # 심볼 정리 및 검증
     symbol = sanitize_stock_symbol(symbol)
