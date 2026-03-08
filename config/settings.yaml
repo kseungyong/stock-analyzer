@@ -25,6 +25,6 @@ stocks:
   - name: Tesla
     symbol: TSLA
   - name: 아이온큐
-    symbol: ionq
+    symbol: IONQ
   - name: 마이크로소프트
-    symbol: msft
+    symbol: MSFT

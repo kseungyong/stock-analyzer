@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from flask import Flask, request, redirect, url_for, jsonify, escape, Response
+from flask import Flask, request, redirect, url_for, jsonify, Response
+from markupsafe import escape
 
 from src.validators import validate_stock_symbol, sanitize_stock_symbol
 
@@ -17,14 +18,28 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml
 
 # 백그라운드 작업 저장소: {job_id: {status, symbol, name, result_html, error, started_at}}
 _jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
 _JOBS_MAX = 50  # 완료된 작업 보관 최대 개수
+
+
+def _jobs_set(job_id: str, **kwargs) -> None:
+    """Lock을 획득한 뒤 _jobs[job_id]를 업데이트한다."""
+    with _jobs_lock:
+        _jobs[job_id].update(kwargs)
+
+
+def _jobs_snapshot() -> dict[str, dict]:
+    """현재 _jobs의 얕은 복사본을 반환한다 (읽기 전용 사용)."""
+    with _jobs_lock:
+        return dict(_jobs)
 
 
 def _trim_jobs():
     """완료/오류 작업이 _JOBS_MAX 초과 시 오래된 것부터 제거한다."""
-    done = [jid for jid, j in _jobs.items() if j["status"] != "running"]
-    for jid in done[:-_JOBS_MAX]:
-        del _jobs[jid]
+    with _jobs_lock:
+        done = [jid for jid, j in _jobs.items() if j["status"] != "running"]
+        for jid in done[:-_JOBS_MAX]:
+            del _jobs[jid]
 
 
 # ---------------------------------------------------------------------------
@@ -57,15 +72,12 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str):
 
         result = analyze_stock(symbol, name)
         if result is None:
-            _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"] = f'"{symbol}" 분석 중 오류 발생'
+            _jobs_set(job_id, status="error", error=f'"{symbol}" 분석 중 오류 발생')
         else:
             html = generate_report([result])
-            _jobs[job_id]["status"] = "done"
-            _jobs[job_id]["result_html"] = html
+            _jobs_set(job_id, status="done", result_html=html)
     except Exception as e:
-        _jobs[job_id]["status"] = "error"
-        _jobs[job_id]["error"] = str(e)
+        _jobs_set(job_id, status="error", error=str(e))
     finally:
         _trim_jobs()
 
@@ -78,14 +90,11 @@ def _run_full_analysis_bg(job_id: str):
         config = load_config()
         html = run_full_analysis(config)
         if html is None:
-            _jobs[job_id]["status"] = "error"
-            _jobs[job_id]["error"] = "분석 결과 없음"
+            _jobs_set(job_id, status="error", error="분석 결과 없음")
         else:
-            _jobs[job_id]["status"] = "done"
-            _jobs[job_id]["result_html"] = html
+            _jobs_set(job_id, status="done", result_html=html)
     except Exception as e:
-        _jobs[job_id]["status"] = "error"
-        _jobs[job_id]["error"] = str(e)
+        _jobs_set(job_id, status="error", error=str(e))
     finally:
         _trim_jobs()
 
@@ -163,7 +172,8 @@ def index():
         )
 
     # 진행 중인 작업 표시
-    running = [j for j in _jobs.values() if j["status"] == "running"]
+    jobs = _jobs_snapshot()
+    running = [j for j in jobs.values() if j["status"] == "running"]
     running_banner = ""
     if running:
         items = ", ".join(j["name"] for j in running)
@@ -182,7 +192,7 @@ def index():
         # 해당 종목이 분석 중인지 확인
         is_running = any(
             j["symbol"] == s["symbol"] and j["status"] == "running"
-            for j in _jobs.values()
+            for j in jobs.values()
         )
         if is_running:
             analyze_btn = '<span class="btn btn-disabled"><span class="spinner"></span> 분석 중</span>'
@@ -255,14 +265,15 @@ def analyze(symbol: str):
             break
 
     job_id = uuid.uuid4().hex[:8]
-    _jobs[job_id] = {
-        "status": "running",
-        "symbol": symbol,
-        "name": name,
-        "result_html": None,
-        "error": None,
-        "started_at": datetime.now().strftime("%H:%M:%S"),
-    }
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "running",
+            "symbol": symbol,
+            "name": name,
+            "result_html": None,
+            "error": None,
+            "started_at": datetime.now().strftime("%H:%M:%S"),
+        }
 
     t = threading.Thread(target=_run_analysis_bg, args=(job_id, symbol, name), daemon=True)
     t.start()
@@ -273,14 +284,15 @@ def analyze(symbol: str):
 @app.route("/analyze-all", methods=["POST"])
 def analyze_all():
     job_id = uuid.uuid4().hex[:8]
-    _jobs[job_id] = {
-        "status": "running",
-        "symbol": "ALL",
-        "name": "전체 종목",
-        "result_html": None,
-        "error": None,
-        "started_at": datetime.now().strftime("%H:%M:%S"),
-    }
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "running",
+            "symbol": "ALL",
+            "name": "전체 종목",
+            "result_html": None,
+            "error": None,
+            "started_at": datetime.now().strftime("%H:%M:%S"),
+        }
 
     t = threading.Thread(target=_run_full_analysis_bg, args=(job_id,), daemon=True)
     t.start()
@@ -290,8 +302,9 @@ def analyze_all():
 
 @app.route("/jobs")
 def jobs_list():
+    jobs = _jobs_snapshot()
     rows = []
-    for jid, j in sorted(_jobs.items(), key=lambda x: x[1]["started_at"], reverse=True):
+    for jid, j in sorted(jobs.items(), key=lambda x: x[1]["started_at"], reverse=True):
         status_cls = f"status-{j['status']}"
         if j["status"] == "running":
             status_label = '<span class="spinner"></span> 분석 중'
@@ -304,7 +317,7 @@ def jobs_list():
         rows.append(f"""
         <tr>
             <td>{j['started_at']}</td>
-            <td>{j['name']} ({j['symbol']})</td>
+            <td>{escape(j['name'])} ({escape(j['symbol'])})</td>
             <td class="{status_cls}">{status_label}</td>
             <td>{link}</td>
         </tr>""")
@@ -320,7 +333,7 @@ def jobs_list():
         <tbody>{''.join(rows) if rows else '<tr><td colspan="4" style="padding:8px;">작업 없음</td></tr>'}</tbody>
     </table>"""
 
-    has_running = any(j["status"] == "running" for j in _jobs.values())
+    has_running = any(j["status"] == "running" for j in jobs.values())
     refresh = "<script>setTimeout(()=>location.reload(), 3000);</script>" if has_running else ""
 
     return _page("작업 목록", f'<div class="card">{table}</div>', refresh)
@@ -328,7 +341,7 @@ def jobs_list():
 
 @app.route("/jobs/<job_id>")
 def job_detail(job_id: str):
-    job = _jobs.get(job_id)
+    job = _jobs_snapshot().get(job_id)
     if not job:
         return _page("오류", "<p>작업을 찾을 수 없습니다.</p>")
 
@@ -354,7 +367,7 @@ def job_detail(job_id: str):
 
 @app.route("/jobs/<job_id>/download")
 def job_download(job_id: str):
-    job = _jobs.get(job_id)
+    job = _jobs_snapshot().get(job_id)
     if not job or job["status"] != "done":
         return _page("오류", "<p>다운로드할 리포트가 없습니다.</p>")
 
@@ -368,7 +381,7 @@ def job_download(job_id: str):
 
 @app.route("/api/jobs/<job_id>")
 def api_job_status(job_id: str):
-    job = _jobs.get(job_id)
+    job = _jobs_snapshot().get(job_id)
     if not job:
         return jsonify({"error": "not found"}), 404
     return jsonify({"status": job["status"], "symbol": job["symbol"], "name": job["name"]})

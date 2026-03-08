@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import time
 from prophet import Prophet
 from sklearn.ensemble import RandomForestClassifier
 from lightgbm import LGBMClassifier
@@ -18,6 +19,10 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 DISCLAIMER = "⚠️ ML 예측은 참고용이며, 투자 판단의 근거로 사용해서는 안 됩니다."
 
 _finbert_pipeline = None
+
+# 예측 결과 TTL 캐시: {cache_key: (timestamp, result)}
+_prediction_cache: dict[str, tuple[float, dict]] = {}
+_PREDICTION_CACHE_TTL = 3600  # 1시간
 
 
 def _get_finbert():
@@ -290,8 +295,18 @@ def predict_direction_transformer(df: pd.DataFrame, lookback: int = 20) -> dict:
     }
 
 
-def run_prediction(df: pd.DataFrame) -> dict:
-    """Prophet + RF + LightGBM + LSTM + Transformer 예측을 실행하고 결과를 반환한다."""
+def run_prediction(df: pd.DataFrame, cache_key: str = "") -> dict:
+    """Prophet + RF + LightGBM + LSTM + Transformer 예측을 실행하고 결과를 반환한다.
+
+    Args:
+        df: OHLCV + 기술지표 데이터프레임
+        cache_key: 캐시 키 (보통 종목 심볼). 지정 시 TTL 캐시를 사용한다.
+    """
+    if cache_key:
+        cached = _prediction_cache.get(cache_key)
+        if cached and time.time() - cached[0] < _PREDICTION_CACHE_TTL:
+            return cached[1]
+
     prophet_result = None
     try:
         prophet_forecast = predict_with_prophet(df)
@@ -331,7 +346,7 @@ def run_prediction(df: pd.DataFrame) -> dict:
     except Exception as e:
         transformer_result = {"error": str(e)}
 
-    return {
+    result = {
         "prophet": prophet_result,
         "random_forest": rf_result,
         "lightgbm": lgbm_result,
@@ -339,6 +354,11 @@ def run_prediction(df: pd.DataFrame) -> dict:
         "transformer": transformer_result,
         "disclaimer": DISCLAIMER,
     }
+
+    if cache_key:
+        _prediction_cache[cache_key] = (time.time(), result)
+
+    return result
 
 
 def analyze_sentiment(news_items: list[dict]) -> dict:
@@ -353,24 +373,25 @@ def analyze_sentiment(news_items: list[dict]) -> dict:
     if not news_items:
         return {"label": "뉴스 없음", "score": 0.0, "details": []}
 
+    # 텍스트 수집 — FinBERT 로드 전에 먼저 확인
+    texts = []
+    for item in news_items:
+        # FinBERT is trained on English — use original English text when available
+        title = item.get("title_en") or item.get("title", "")
+        summary = item.get("summary_en") or item.get("summary", "")
+        text = ". ".join(filter(None, [title, summary]))
+        if text:
+            texts.append((item, text[:512]))  # truncate to 512 chars
+
+    if not texts:
+        return {"label": "분석할 텍스트 없음", "score": 0.0, "details": []}
+
     try:
         sentiment_pipeline = _get_finbert()
     except ImportError:
         return {"error": "transformers library not installed"}
     except Exception as e:
         return {"error": f"Failed to load FinBERT: {e}"}
-
-    texts = []
-    for item in news_items:
-        # FinBERT is trained on English — use original English text when available
-        title = item.get("title_en") or item.get("title", "")
-        summary = item.get("summary_en") or item.get("summary", "")
-        text = f"{title}. {summary}".strip()
-        if text:
-            texts.append((item, text[:512]))  # truncate to 512 chars
-
-    if not texts:
-        return {"label": "분석할 텍스트 없음", "score": 0.0, "details": []}
 
     results = []
     total_score = 0

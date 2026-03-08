@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import base64
+import html
 import io
 from datetime import datetime
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-plt.rcParams["font.family"] = "AppleGothic"
-plt.rcParams["axes.unicode_minus"] = False
+import matplotlib.font_manager as _fm
 import matplotlib.dates as mdates
 import pandas as pd
+
+# 크로스 플랫폼 한글 폰트 자동 감지
+def _detect_korean_font() -> str:
+    available = {f.name for f in _fm.fontManager.ttflist}
+    for font in ("AppleGothic", "NanumGothic", "Malgun Gothic", "NanumBarunGothic", "UnDotum"):
+        if font in available:
+            return font
+    return "DejaVu Sans"  # fallback — 한글 깨질 수 있으나 오류 없음
+
+plt.rcParams["font.family"] = _detect_korean_font()
+plt.rcParams["axes.unicode_minus"] = False
 
 
 def _create_chart(df: pd.DataFrame, name: str) -> str:
@@ -81,10 +92,11 @@ def generate_report(analyses: list[dict]) -> str:
     rows = []
 
     for item in analyses:
-        name = item["name"]
+        name = html.escape(item["name"])
+        symbol_esc = html.escape(item["symbol"])
         sig = item["signal"]
         pred = item["prediction"]
-        chart_b64 = _create_chart(item["df"], name)
+        chart_b64 = _create_chart(item["df"], item["name"])
 
         prophet = pred.get("prophet", {})
         rf = pred.get("random_forest", {})
@@ -170,13 +182,17 @@ def generate_report(analyses: list[dict]) -> str:
                 title = n.get("title", "")
                 link = n.get("link", "")
                 publisher = n.get("publisher", "")
-                pub_tag = f' <span style="color:#999;">— {publisher}</span>' if publisher else ""
-                summary = n.get("summary", "")
-                summary_html = f'<br><span style="color:#555;font-size:0.85em;">{summary}</span>' if summary else ""
-                if link:
-                    news_li += f'<li style="margin:6px 0;"><a href="{link}" target="_blank" style="color:#0066cc;">{title}</a>{pub_tag}{summary_html}</li>'
+                safe_title = html.escape(title)
+                safe_summary = html.escape(n.get("summary", ""))
+                safe_publisher = html.escape(publisher)
+                pub_tag = f' <span style="color:#999;">— {safe_publisher}</span>' if safe_publisher else ""
+                summary_html = f'<br><span style="color:#555;font-size:0.85em;">{safe_summary}</span>' if safe_summary else ""
+                # javascript: URL 방지
+                safe_link = link if link.startswith(("http://", "https://")) else ""
+                if safe_link:
+                    news_li += f'<li style="margin:6px 0;"><a href="{safe_link}" target="_blank" style="color:#0066cc;">{safe_title}</a>{pub_tag}{summary_html}</li>'
                 else:
-                    news_li += f'<li style="margin:6px 0;">{title}{pub_tag}{summary_html}</li>'
+                    news_li += f'<li style="margin:6px 0;">{safe_title}{pub_tag}{summary_html}</li>'
             news_html = f'<h4 style="margin:12px 0 4px;">관련 뉴스</h4><ul style="font-size:0.9em; padding-left:20px;">{news_li}</ul>'
 
         # --- NEW: 감성 분석 표시 ---
@@ -199,7 +215,7 @@ def generate_report(analyses: list[dict]) -> str:
 
         rows.append(f"""
         <div style="border:1px solid #ddd; border-radius:8px; padding:16px; margin:12px 0;">
-            <h3>{name} ({item['symbol']})</h3>
+            <h3>{name} ({symbol_esc})</h3>
             <p>현재가: <b>{sig['close']:,.2f}</b> | RSI: {sig['rsi']}
                | <span style="color:{_signal_color(sig['signal'])}; font-weight:bold;">
                  {sig['signal']}</span> (점수: {sig['score']})</p>

@@ -52,7 +52,7 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
         df = fetch_stock_data(symbol)
         df = compute_indicators(df)
         signal = generate_signal(df)
-        prediction = run_prediction(df)
+        prediction = run_prediction(df, cache_key=symbol)
         news = fetch_news(symbol)
         # --- NEW: Sentiment Analysis ---
         from src.ml_predictor import analyze_sentiment
