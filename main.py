@@ -54,6 +54,10 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
         signal = generate_signal(df)
         prediction = run_prediction(df)
         news = fetch_news(symbol)
+        # --- NEW: Sentiment Analysis ---
+        from src.ml_predictor import analyze_sentiment
+        sentiment = analyze_sentiment(news)
+
         return {
             "name": name,
             "symbol": symbol,
@@ -61,6 +65,7 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
             "signal": signal,
             "prediction": prediction,
             "news": news,
+            "sentiment": sentiment,
         }
     except Exception as e:
         print(f"  [ERROR] {name} ({symbol}): {e}")

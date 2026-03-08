@@ -113,7 +113,7 @@ def generate_report(analyses: list[dict]) -> str:
             ml_rows += (
                 f"<tr><td style='padding:4px 8px; font-weight:bold;'>Prophet</td>"
                 f"<td style='padding:4px 8px;'>{prophet['predicted_price']} ({prophet['change_pct']:+.1f}%)</td>"
-                f"<td style='padding:4px 8px;'>7일 예측</td></tr>"
+                f"<td style='padding:4px 8px;'>7일 후 예측</td></tr>"
             )
         ml_rows += (
             f"<tr><td style='padding:4px 8px; font-weight:bold;'>Random Forest</td>"
@@ -138,6 +138,21 @@ def generate_report(analyses: list[dict]) -> str:
                 "<tr><td style='padding:4px 8px; font-weight:bold;'>LSTM</td>"
                 "<td style='padding:4px 8px;' colspan='2'>예측 불가</td></tr>"
             )
+
+        # --- NEW: Transformer ---
+        transformer = pred.get("transformer", {})
+        if transformer and "error" not in transformer:
+            ml_rows += (
+                f"<tr><td style='padding:4px 8px; font-weight:bold; color:#0066cc;'>Transformer (Advanced)</td>"
+                f"<td style='padding:4px 8px;'>{transformer.get('direction', 'N/A')}</td>"
+                f"<td style='padding:4px 8px;'>신뢰도 {transformer.get('confidence', 0)}%</td></tr>"
+            )
+        else:
+            ml_rows += (
+                "<tr><td style='padding:4px 8px; font-weight:bold; color:#0066cc;'>Transformer (Advanced)</td>"
+                "<td style='padding:4px 8px;' colspan='2'>예측 불가</td></tr>"
+            )
+            
         ml_html = (
             "<table style='width:100%; border-collapse:collapse; font-size:0.9em; margin:8px 0;'>"
             "<tr style='background:#f0f0f0;'><th style='padding:4px 8px; text-align:left;'>모델</th>"
@@ -164,6 +179,24 @@ def generate_report(analyses: list[dict]) -> str:
                     news_li += f'<li style="margin:6px 0;">{title}{pub_tag}{summary_html}</li>'
             news_html = f'<h4 style="margin:12px 0 4px;">관련 뉴스</h4><ul style="font-size:0.9em; padding-left:20px;">{news_li}</ul>'
 
+        # --- NEW: 감성 분석 표시 ---
+        sentiment = item.get("sentiment", {})
+        sentiment_html = ""
+        if sentiment:
+            if "error" in sentiment:
+                sentiment_html = f'<p style="font-size:0.9em; color:#dc3545;">[감성 분석 오류] {sentiment["error"]}</p>'
+            else:
+                sent_label = sentiment.get("label", "N/A")
+                sent_score = sentiment.get("score", 0.0)
+                sent_color = "#2ca02c" if "긍정" in sent_label else ("#dc3545" if "부정" in sent_label else "#666")
+                sentiment_html = (
+                    f'<div style="margin-top:10px; padding:10px; background:#f5f7fa; border-radius:6px; border-left:4px solid {sent_color};">'
+                    f'<h4 style="margin:0 0 4px; color:#333;">뉴스 감성 분석 (FinBERT)</h4>'
+                    f'<p style="margin:0; font-size:0.95em;">종합 의견: <strong style="color:{sent_color};">{sent_label}</strong> '
+                    f'<span style="color:#666; font-size:0.9em;">(점수: {sent_score:+.3f})</span></p>'
+                    f'</div>'
+                )
+
         rows.append(f"""
         <div style="border:1px solid #ddd; border-radius:8px; padding:16px; margin:12px 0;">
             <h3>{name} ({item['symbol']})</h3>
@@ -171,6 +204,7 @@ def generate_report(analyses: list[dict]) -> str:
                | <span style="color:{_signal_color(sig['signal'])}; font-weight:bold;">
                  {sig['signal']}</span> (점수: {sig['score']})</p>
             <p style="font-size:0.9em;">{', '.join(sig['reasons']) if sig['reasons'] else '특이사항 없음'}</p>
+            {sentiment_html}
             <h4 style="margin:12px 0 4px;">기술 지표 분석</h4>
             {indicators_html}
             <h4 style="margin:12px 0 4px;">ML 예측</h4>

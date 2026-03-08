@@ -67,10 +67,12 @@ def fetch_news(symbol: str, max_items: int = 5) -> list[dict]:
             title = content.get("title", "")
             results.append({
                 "title": _translate(title),
+                "title_en": title,
                 "link": content.get("canonicalUrl", {}).get("url", ""),
                 "publisher": content.get("provider", {}).get("displayName", ""),
                 "published": content.get("pubDate", ""),
                 "summary": _translate(summary),
+                "summary_en": summary,
             })
         return results
     except Exception as e:
