@@ -17,6 +17,17 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 DISCLAIMER = "⚠️ ML 예측은 참고용이며, 투자 판단의 근거로 사용해서는 안 됩니다."
 
+_finbert_pipeline = None
+
+
+def _get_finbert():
+    """FinBERT 파이프라인을 로드하고 캐싱한다. 최초 호출 시에만 모델을 로드한다."""
+    global _finbert_pipeline
+    if _finbert_pipeline is None:
+        from transformers import pipeline
+        _finbert_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+    return _finbert_pipeline
+
 
 def predict_with_prophet(df: pd.DataFrame, days: int = 7) -> pd.DataFrame:
     """Prophet으로 향후 가격 추세를 예측한다.
@@ -343,9 +354,7 @@ def analyze_sentiment(news_items: list[dict]) -> dict:
         return {"label": "뉴스 없음", "score": 0.0, "details": []}
 
     try:
-        from transformers import pipeline
-        # Lazy loading to avoid heavy startup time
-        sentiment_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+        sentiment_pipeline = _get_finbert()
     except ImportError:
         return {"error": "transformers library not installed"}
     except Exception as e:

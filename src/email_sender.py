@@ -39,9 +39,17 @@ def send_report(html: str, config: dict) -> None:
 
     msg.attach(MIMEText(html, "html", "utf-8"))
 
-    with smtplib.SMTP(config["smtp_server"], config["smtp_port"]) as server:
-        server.starttls()
-        server.login(sender, password)
-        server.sendmail(sender, config["recipients"], msg.as_string())
-
-    print(f"[EMAIL] 리포트 발송 완료: {msg['To']}")
+    try:
+        with smtplib.SMTP(config["smtp_server"], config["smtp_port"]) as server:
+            server.starttls()
+            server.login(sender, password)
+            server.sendmail(sender, config["recipients"], msg.as_string())
+        print(f"[EMAIL] 리포트 발송 완료: {msg['To']}")
+    except smtplib.SMTPAuthenticationError:
+        print("[EMAIL] 인증 실패: EMAIL_SENDER, EMAIL_PASSWORD를 확인하세요.")
+    except smtplib.SMTPConnectError:
+        print(f"[EMAIL] 연결 실패: {config['smtp_server']}:{config['smtp_port']} 에 접속할 수 없습니다.")
+    except smtplib.SMTPException as e:
+        print(f"[EMAIL] 발송 실패: {e}")
+    except OSError as e:
+        print(f"[EMAIL] 네트워크 오류: {e}")
