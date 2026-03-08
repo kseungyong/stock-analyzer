@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from flask import Flask, request, redirect, url_for, jsonify
+from flask import Flask, request, redirect, url_for, jsonify, escape, Response
 
 from src.validators import validate_stock_symbol, sanitize_stock_symbol
 
@@ -17,6 +17,14 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml
 
 # 백그라운드 작업 저장소: {job_id: {status, symbol, name, result_html, error, started_at}}
 _jobs: dict[str, dict] = {}
+_JOBS_MAX = 50  # 완료된 작업 보관 최대 개수
+
+
+def _trim_jobs():
+    """완료/오류 작업이 _JOBS_MAX 초과 시 오래된 것부터 제거한다."""
+    done = [jid for jid, j in _jobs.items() if j["status"] != "running"]
+    for jid in done[:-_JOBS_MAX]:
+        del _jobs[jid]
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +66,8 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str):
     except Exception as e:
         _jobs[job_id]["status"] = "error"
         _jobs[job_id]["error"] = str(e)
+    finally:
+        _trim_jobs()
 
 
 def _run_full_analysis_bg(job_id: str):
@@ -76,6 +86,8 @@ def _run_full_analysis_bg(job_id: str):
     except Exception as e:
         _jobs[job_id]["status"] = "error"
         _jobs[job_id]["error"] = str(e)
+    finally:
+        _trim_jobs()
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +153,15 @@ def index():
     config = _load_config()
     stocks = _get_all_stocks(config)
 
+    # 에러 메시지 배너
+    error_msg = request.args.get("error", "")
+    error_banner = ""
+    if error_msg:
+        error_banner = (
+            f'<div class="card" style="border-left:4px solid #dc3545; margin-bottom:8px;">'
+            f'<span style="color:#dc3545;">⚠ {escape(error_msg)}</span></div>'
+        )
+
     # 진행 중인 작업 표시
     running = [j for j in _jobs.values() if j["status"] == "running"]
     running_banner = ""
@@ -205,11 +226,12 @@ def index():
     </form>"""
 
     body = f"""
+    {error_banner}
     {running_banner}
     {add_form}
     {analyze_all}
     <div class="stock-grid">{''.join(cards)}</div>
-    """ if cards else f"{running_banner}{add_form}<p>등록된 종목이 없습니다.</p>"
+    """ if cards else f"{error_banner}{running_banner}{add_form}<p>등록된 종목이 없습니다.</p>"
 
     refresh = ""
     if running:
@@ -322,7 +344,26 @@ def job_detail(job_id: str):
     if job["status"] == "error":
         return _page("분석 실패", f'<div class="card"><p style="color:#dc3545;">{job["error"]}</p></div>')
 
-    return _page(f"{job['name']} 분석 결과", f'<div class="card">{job["result_html"]}</div>')
+    download_btn = (
+        f'<div style="margin-bottom:12px;">'
+        f'<a class="btn btn-primary" href="/jobs/{job_id}/download">HTML 다운로드</a>'
+        f'</div>'
+    )
+    return _page(f"{job['name']} 분석 결과", f'{download_btn}<div class="card">{job["result_html"]}</div>')
+
+
+@app.route("/jobs/<job_id>/download")
+def job_download(job_id: str):
+    job = _jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return _page("오류", "<p>다운로드할 리포트가 없습니다.</p>")
+
+    filename = f"report_{job['symbol']}_{datetime.now().strftime('%Y%m%d')}.html"
+    return Response(
+        job["result_html"],
+        mimetype="text/html",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.route("/api/jobs/<job_id>")
@@ -340,7 +381,7 @@ def stocks_add():
     market = request.form.get("market", "korea")
 
     if not symbol or not name:
-        return redirect(url_for("index"), code=303)
+        return redirect(url_for("index", error="심볼과 종목명을 모두 입력하세요."), code=303)
 
     # 심볼 정리 및 검증
     symbol = sanitize_stock_symbol(symbol)
@@ -351,17 +392,18 @@ def stocks_add():
 
     # 검증
     if not validate_stock_symbol(symbol):
-        # 검증 실패 시 리다이렉트 (에러 메시지는 생략, 단순 무시)
-        return redirect(url_for("index"), code=303)
+        return redirect(url_for("index", error=f"유효하지 않은 심볼입니다: {symbol}"), code=303)
 
     config = _load_config()
     if market not in config.get("stocks", {}):
         config.setdefault("stocks", {})[market] = []
 
     existing = {s["symbol"] for s in config["stocks"][market]}
-    if symbol not in existing:
-        config["stocks"][market].append({"symbol": symbol, "name": name})
-        _save_config(config)
+    if symbol in existing:
+        return redirect(url_for("index", error=f"{symbol} 은(는) 이미 등록된 종목입니다."), code=303)
+
+    config["stocks"][market].append({"symbol": symbol, "name": name})
+    _save_config(config)
 
     return redirect(url_for("index"), code=303)
 

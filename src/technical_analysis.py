@@ -29,6 +29,11 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_Middle"] = bb.bollinger_mavg()
     df["BB_Lower"] = bb.bollinger_lband()
 
+    # 거래량 이동평균 (20일)
+    df["Volume_MA20"] = df["Volume"].rolling(20).mean()
+    # 거래량 비율: 오늘 거래량 / 20일 평균
+    df["Volume_Ratio"] = df["Volume"] / df["Volume_MA20"]
+
     return df
 
 
@@ -124,6 +129,23 @@ def generate_signal(df: pd.DataFrame) -> dict:
         bb_comment = "밴드 하단 부근 — 상대적 약세"
         bb_value = "중하단"
     indicators.append({"name": "볼린저밴드", "value": bb_value, "comment": bb_comment})
+
+    # 거래량 시그널
+    vol_ratio = latest.get("Volume_Ratio", float("nan"))
+    if pd.notna(vol_ratio):
+        vol_ratio = float(vol_ratio)
+        if vol_ratio >= 2.0:
+            vol_comment = f"급등 (평균 대비 {vol_ratio:.1f}배) — 강한 추세 가능성"
+            if score > 0:
+                score += 1
+                reasons.append("거래량 급증")
+        elif vol_ratio >= 1.5:
+            vol_comment = f"증가 (평균 대비 {vol_ratio:.1f}배)"
+        elif vol_ratio <= 0.5:
+            vol_comment = f"감소 (평균 대비 {vol_ratio:.1f}배) — 추세 약화 가능성"
+        else:
+            vol_comment = f"보통 ({vol_ratio:.1f}배)"
+        indicators.append({"name": "거래량", "value": f"{vol_ratio:.1f}배", "comment": vol_comment})
 
     if score >= 2:
         signal = "매수"
