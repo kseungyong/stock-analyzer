@@ -1,6 +1,9 @@
+import logging
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
+
+logger = logging.getLogger(__name__)
 
 
 def start_scheduler(job_func, config: dict) -> None:
@@ -21,11 +24,12 @@ def start_scheduler(job_func, config: dict) -> None:
 
     scheduler.add_job(job_func, trigger, id="daily_report", name="Daily Stock Report")
 
-    print(f"[SCHEDULER] 매일 {config.get('hour', 8)}:{config.get('minute', 30):02d} "
-          f"({config.get('timezone', 'Asia/Seoul')}) 실행 예정")
-    print("[SCHEDULER] Ctrl+C로 종료")
+    logger.info(
+        "스케줄러 시작 — 매일 %d:%02d (%s) 실행 예정. Ctrl+C로 종료.",
+        config.get("hour", 8), config.get("minute", 30), config.get("timezone", "Asia/Seoul"),
+    )
 
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
-        print("\n[SCHEDULER] 종료됨")
+        logger.info("스케줄러 종료됨.")

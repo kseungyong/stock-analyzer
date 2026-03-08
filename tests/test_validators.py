@@ -1,6 +1,6 @@
 """src/validators.py 단위 테스트."""
 import pytest
-from src.validators import validate_stock_symbol, sanitize_stock_symbol
+from src.validators import validate_stock_symbol, sanitize_stock_symbol, validate_stock_name
 
 
 class TestValidateStockSymbol:
@@ -30,6 +30,29 @@ class TestValidateStockSymbol:
 
     def test_path_traversal(self):
         assert validate_stock_symbol("../../etc") is False
+
+
+class TestValidateStockName:
+    def test_valid_name(self):
+        assert validate_stock_name("Apple") is True
+
+    def test_korean_name(self):
+        assert validate_stock_name("삼성전자") is True
+
+    def test_empty_string(self):
+        assert validate_stock_name("") is False
+
+    def test_none(self):
+        assert validate_stock_name(None) is False
+
+    def test_whitespace_only(self):
+        assert validate_stock_name("   ") is False
+
+    def test_max_length(self):
+        assert validate_stock_name("A" * 50) is True
+
+    def test_over_max_length(self):
+        assert validate_stock_name("A" * 51) is False
 
 
 class TestSanitizeStockSymbol:

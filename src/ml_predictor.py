@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import time
+import threading
 from prophet import Prophet
 from sklearn.ensemble import RandomForestClassifier
 from lightgbm import LGBMClassifier
@@ -19,6 +20,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 DISCLAIMER = "⚠️ ML 예측은 참고용이며, 투자 판단의 근거로 사용해서는 안 됩니다."
 
 _finbert_pipeline = None
+_finbert_lock = threading.Lock()
 
 # 예측 결과 TTL 캐시: {cache_key: (timestamp, result)}
 _prediction_cache: dict[str, tuple[float, dict]] = {}
@@ -26,11 +28,13 @@ _PREDICTION_CACHE_TTL = 3600  # 1시간
 
 
 def _get_finbert():
-    """FinBERT 파이프라인을 로드하고 캐싱한다. 최초 호출 시에만 모델을 로드한다."""
+    """FinBERT 파이프라인을 로드하고 캐싱한다. 최초 호출 시에만 모델을 로드한다 (thread-safe)."""
     global _finbert_pipeline
     if _finbert_pipeline is None:
-        from transformers import pipeline
-        _finbert_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+        with _finbert_lock:
+            if _finbert_pipeline is None:  # double-checked locking
+                from transformers import pipeline
+                _finbert_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
     return _finbert_pipeline
 
 
@@ -57,36 +61,40 @@ def predict_with_prophet(df: pd.DataFrame, days: int = 7) -> pd.DataFrame:
     return forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(days)
 
 
-def predict_direction(df: pd.DataFrame) -> dict:
-    """Random Forest로 다음 날 상승/하락을 분류한다.
+_CLF_FEATURES = ["MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower"]
 
-    기술적 지표를 피처로 사용한다.
+
+def _prepare_clf_data(df: pd.DataFrame) -> tuple | None:
+    """분류 모델 공통 데이터 준비 — 피처 행렬, 타겟, train/test 분할을 반환한다.
+
+    Returns:
+        (X_train, X_test, y_train, y_test, X_all) 또는 데이터 부족 시 None
     """
-    features = ["MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower"]
-    data = df.dropna(subset=features).copy()
-
+    data = df.dropna(subset=_CLF_FEATURES).copy()
     if len(data) < 30:
-        return {"direction": "데이터 부족", "confidence": 0.0}
-
+        return None
     data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
     data = data.dropna()
 
-    X = data[features].values
+    X = data[_CLF_FEATURES].values
     y = data["Target"].values
-
     split = int(len(X) * 0.8)
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
+    return X[:split], X[split:], y[:split], y[split:], X
+
+
+def predict_direction(df: pd.DataFrame) -> dict:
+    """Random Forest로 다음 날 상승/하락을 분류한다."""
+    prepared = _prepare_clf_data(df)
+    if prepared is None:
+        return {"direction": "데이터 부족", "confidence": 0.0}
+    X_train, X_test, y_train, y_test, X = prepared
 
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
     clf.fit(X_train, y_train)
-
     accuracy = clf.score(X_test, y_test) if len(X_test) > 0 else 0.0
 
-    latest = X[-1].reshape(1, -1)
-    proba = clf.predict_proba(latest)[0]
-    pred = clf.predict(latest)[0]
-
+    proba = clf.predict_proba(X[-1].reshape(1, -1))[0]
+    pred = clf.predict(X[-1].reshape(1, -1))[0]
     return {
         "direction": "상승" if pred == 1 else "하락",
         "confidence": round(float(max(proba)) * 100, 1),
@@ -96,31 +104,17 @@ def predict_direction(df: pd.DataFrame) -> dict:
 
 def predict_direction_lgbm(df: pd.DataFrame) -> dict:
     """LightGBM으로 다음 날 상승/하락을 분류한다."""
-    features = ["MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower"]
-    data = df.dropna(subset=features).copy()
-
-    if len(data) < 30:
+    prepared = _prepare_clf_data(df)
+    if prepared is None:
         return {"direction": "데이터 부족", "confidence": 0.0}
-
-    data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
-    data = data.dropna()
-
-    X = data[features].values
-    y = data["Target"].values
-
-    split = int(len(X) * 0.8)
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
+    X_train, X_test, y_train, y_test, X = prepared
 
     clf = LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)
     clf.fit(X_train, y_train)
-
     accuracy = clf.score(X_test, y_test) if len(X_test) > 0 else 0.0
 
-    latest = X[-1].reshape(1, -1)
-    proba = clf.predict_proba(latest)[0]
-    pred = clf.predict(latest)[0]
-
+    proba = clf.predict_proba(X[-1].reshape(1, -1))[0]
+    pred = clf.predict(X[-1].reshape(1, -1))[0]
     return {
         "direction": "상승" if pred == 1 else "하락",
         "confidence": round(float(max(proba)) * 100, 1),
@@ -137,7 +131,7 @@ def predict_direction_lstm(df: pd.DataFrame, lookback: int = 20) -> dict:
     from tensorflow.keras.layers import LSTM, Dense, Dropout
     from tensorflow.keras.callbacks import EarlyStopping
 
-    features = ["MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower"]
+    features = _CLF_FEATURES
     data = df.dropna(subset=features).copy()
 
     if len(data) < lookback + 30:
@@ -199,7 +193,7 @@ def predict_direction_transformer(df: pd.DataFrame, lookback: int = 20) -> dict:
     except ImportError:
         return {"direction": "PyTorch 미설치", "confidence": 0.0, "accuracy": 0.0}
 
-    features = ["MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower"]
+    features = _CLF_FEATURES
     data = df.dropna(subset=features).copy()
 
     if len(data) < lookback + 30:

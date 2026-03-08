@@ -1,3 +1,4 @@
+import logging
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -5,6 +6,8 @@ from email.mime.text import MIMEText
 from datetime import datetime
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # 환경변수 로드
 load_dotenv()
@@ -27,9 +30,7 @@ def send_report(html: str, config: dict) -> None:
     password = os.getenv("EMAIL_PASSWORD") or config.get("password", "")
 
     if not sender or not password:
-        print("[EMAIL] 이메일 인증정보가 설정되지 않았습니다. 발송을 건너뜁니다.")
-        print("[EMAIL] .env 파일에 EMAIL_SENDER, EMAIL_PASSWORD를 설정하거나")
-        print("[EMAIL] config/settings.yaml에 sender, password를 입력하세요.")
+        logger.warning("이메일 인증정보 없음 — 발송 건너뜀. .env에 EMAIL_SENDER/EMAIL_PASSWORD를 설정하세요.")
         return
 
     msg = MIMEMultipart("alternative")
@@ -44,12 +45,12 @@ def send_report(html: str, config: dict) -> None:
             server.starttls()
             server.login(sender, password)
             server.sendmail(sender, config["recipients"], msg.as_string())
-        print(f"[EMAIL] 리포트 발송 완료: {msg['To']}")
+        logger.info("리포트 발송 완료: %s", msg["To"])
     except smtplib.SMTPAuthenticationError:
-        print("[EMAIL] 인증 실패: EMAIL_SENDER, EMAIL_PASSWORD를 확인하세요.")
+        logger.error("이메일 인증 실패: EMAIL_SENDER, EMAIL_PASSWORD를 확인하세요.")
     except smtplib.SMTPConnectError:
-        print(f"[EMAIL] 연결 실패: {config['smtp_server']}:{config['smtp_port']} 에 접속할 수 없습니다.")
+        logger.error("이메일 연결 실패: %s:%s", config["smtp_server"], config["smtp_port"])
     except smtplib.SMTPException as e:
-        print(f"[EMAIL] 발송 실패: {e}")
+        logger.error("이메일 발송 실패: %s", e)
     except OSError as e:
-        print(f"[EMAIL] 네트워크 오류: {e}")
+        logger.error("이메일 네트워크 오류: %s", e)

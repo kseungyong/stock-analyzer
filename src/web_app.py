@@ -5,6 +5,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
 from flask import Flask, request, redirect, url_for, jsonify, Response
@@ -21,7 +22,7 @@ _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _JOBS_MAX = 50  # 완료된 작업 보관 최대 개수
 
-_config_lock = threading.Lock()  # settings.yaml 동시 쓰기 방지
+_config_lock = threading.RLock()  # settings.yaml read-modify-write 보호 (재진입 허용)
 
 
 def _jobs_set(job_id: str, **kwargs) -> None:
@@ -375,10 +376,11 @@ def job_download(job_id: str):
         return _page("오류", "<p>다운로드할 리포트가 없습니다.</p>")
 
     filename = f"report_{job['symbol']}_{datetime.now().strftime('%Y%m%d')}.html"
+    encoded = quote(filename, safe="")
     return Response(
         job["result_html"],
         mimetype="text/html",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded}"},
     )
 
 
@@ -413,16 +415,17 @@ def stocks_add():
     if not validate_stock_symbol(symbol):
         return redirect(url_for("index", error=f"유효하지 않은 심볼입니다: {symbol}"), code=303)
 
-    config = _load_config()
-    if market not in config.get("stocks", {}):
-        config.setdefault("stocks", {})[market] = []
+    with _config_lock:
+        config = _load_config()
+        if market not in config.get("stocks", {}):
+            config.setdefault("stocks", {})[market] = []
 
-    existing = {s["symbol"] for s in config["stocks"][market]}
-    if symbol in existing:
-        return redirect(url_for("index", error=f"{symbol} 은(는) 이미 등록된 종목입니다."), code=303)
+        existing = {s["symbol"] for s in config["stocks"][market]}
+        if symbol in existing:
+            return redirect(url_for("index", error=f"{symbol} 은(는) 이미 등록된 종목입니다."), code=303)
 
-    config["stocks"][market].append({"symbol": symbol, "name": name})
-    _save_config(config)
+        config["stocks"][market].append({"symbol": symbol, "name": name})
+        _save_config(config)
 
     return redirect(url_for("index"), code=303)
 
@@ -433,10 +436,11 @@ def stocks_delete():
     if not symbol:
         return redirect(url_for("index"))
 
-    config = _load_config()
-    for market, group in config.get("stocks", {}).items():
-        config["stocks"][market] = [s for s in group if s["symbol"] != symbol]
-    _save_config(config)
+    with _config_lock:
+        config = _load_config()
+        for market, group in config.get("stocks", {}).items():
+            config["stocks"][market] = [s for s in group if s["symbol"] != symbol]
+        _save_config(config)
 
     return redirect(url_for("index"), code=303)
 

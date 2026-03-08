@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 import time
+from functools import lru_cache
 import yfinance as yf
 import pandas as pd
 import re
 from datetime import datetime, timedelta
 
 from deep_translator import GoogleTranslator
+
+logger = logging.getLogger(__name__)
 
 _translator = GoogleTranslator(source="en", target="ko")
 
@@ -18,11 +22,17 @@ def _is_english(text: str) -> bool:
     return ascii_chars / len(text) > 0.7
 
 
+@lru_cache(maxsize=512)
+def _translate_cached(text: str) -> str:
+    """번역 결과를 캐싱한다. 동일 텍스트 반복 API 호출을 방지한다."""
+    return _translator.translate(text)
+
+
 def _translate(text: str) -> str:
     if not text or not _is_english(text):
         return text
     try:
-        return _translator.translate(text)
+        return _translate_cached(text)
     except Exception:
         return text
 
@@ -88,7 +98,7 @@ def fetch_news(symbol: str, max_items: int = 10) -> list[dict]:
             })
         return results
     except Exception as e:
-        print(f"  [뉴스 수집 오류] {symbol}: {e}")
+        logger.warning("뉴스 수집 오류 [%s]: %s", symbol, e)
         return []
 
 
@@ -107,7 +117,7 @@ def fetch_multiple(stocks: list[dict], period_days: int = 365) -> dict[str, pd.D
         symbol = stock["symbol"]
         try:
             results[symbol] = fetch_stock_data(symbol, period_days)
-            print(f"  [OK] {stock['name']} ({symbol})")
+            logger.info("데이터 수집 완료: %s (%s)", stock["name"], symbol)
         except Exception as e:
-            print(f"  [FAIL] {stock['name']} ({symbol}): {e}")
+            logger.error("데이터 수집 실패: %s (%s): %s", stock["name"], symbol, e)
     return results

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -16,6 +17,13 @@ from src.email_sender import send_report
 from src.scheduler import start_scheduler
 from src.validators import validate_stock_symbol, sanitize_stock_symbol
 
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).parent / "config" / "settings.yaml"
 
@@ -45,7 +53,7 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
     # 입력 검증
     symbol = sanitize_stock_symbol(symbol)
     if not validate_stock_symbol(symbol):
-        print(f"  [ERROR] 유효하지 않은 심볼: {symbol}")
+        logger.error("유효하지 않은 심볼: %s", symbol)
         return None
 
     try:
@@ -67,28 +75,28 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
             "sentiment": sentiment,
         }
     except Exception as e:
-        print(f"  [ERROR] {name} ({symbol}): {e}")
+        logger.error("분석 실패 — %s (%s): %s", name, symbol, e)
         return None
 
 
 def run_full_analysis(config: dict) -> str | None:
     """전체 종목 분석 + 리포트 생성."""
     stocks = get_all_stocks(config)
-    print(f"[분석 시작] {len(stocks)}개 종목")
+    logger.info("분석 시작: %d개 종목", len(stocks))
 
     analyses = []
     for stock in stocks:
-        print(f"  분석 중: {stock['name']} ({stock['symbol']})")
+        logger.info("분석 중: %s (%s)", stock["name"], stock["symbol"])
         result = analyze_stock(stock["symbol"], stock["name"])
         if result:
             analyses.append(result)
 
     if not analyses:
-        print("[WARNING] 분석 결과 없음")
+        logger.warning("분석 결과 없음")
         return None
 
     html = generate_report(analyses)
-    print(f"[완료] {len(analyses)}개 종목 리포트 생성")
+    logger.info("리포트 생성 완료: %d개 종목", len(analyses))
     return html
 
 
@@ -125,13 +133,13 @@ def main():
                 name = stock["name"]
                 break
 
-        print(f"[분석] {name} ({args.symbol})")
+        logger.info("단일 종목 분석: %s (%s)", name, args.symbol)
         result = analyze_stock(args.symbol, name)
         if result:
             html = generate_report([result])
             out = args.output or f"{args.symbol.replace('.', '_')}_report.html"
             Path(out).write_text(html, encoding="utf-8")
-            print(f"[저장] {out}")
+            logger.info("리포트 저장: %s", out)
         return
 
     if args.start_scheduler:
@@ -143,7 +151,7 @@ def main():
         if html:
             out = args.output or "report.html"
             Path(out).write_text(html, encoding="utf-8")
-            print(f"[저장] {out}")
+            logger.info("리포트 저장: %s", out)
             send_report(html, config["email"])
         return
 
