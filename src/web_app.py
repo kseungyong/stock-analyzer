@@ -492,6 +492,28 @@ body {
 /* ── Job detail ── */
 .result-frame { margin-top: 16px; }
 
+/* ── Autocomplete ── */
+.autocomplete-wrap { position: relative; }
+.autocomplete-list {
+  position: absolute; top: 100%; left: 0; right: 0;
+  margin-top: 4px;
+  background: var(--white); border: 1px solid var(--slate-200);
+  border-radius: var(--radius); box-shadow: var(--shadow-md);
+  max-height: 280px; overflow-y: auto; z-index: 20;
+  display: none;
+}
+.autocomplete-list.open { display: block; }
+.autocomplete-item {
+  padding: 8px 12px; cursor: pointer; display: flex;
+  align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 0.875rem; border-bottom: 1px solid var(--slate-100);
+}
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item:hover, .autocomplete-item.active { background: var(--blue-50); }
+.autocomplete-item .ac-name { font-weight: 600; color: var(--slate-900); }
+.autocomplete-item .ac-symbol { font-family: 'Fira Code', monospace; font-size: 0.78rem; color: var(--slate-500); margin-left: 6px; }
+.autocomplete-empty { padding: 12px; color: var(--slate-500); font-size: 0.875rem; text-align: center; }
+
 /* ── Responsive ── */
 @media (max-width: 640px) {
   .topbar { padding: 0 16px; }
@@ -610,9 +632,12 @@ def index():
       <form method="post" action="/stocks/add">
         {_csrf_input()}
         <div class="add-form">
-          <div class="field">
-            <label>심볼</label>
-            <input name="symbol" placeholder="예: AAPL, 005930" required style="width:160px;">
+          <div class="field autocomplete-wrap">
+            <label>검색</label>
+            <input name="symbol" id="stock-search-input"
+                   placeholder="종목명 또는 심볼 검색" autocomplete="off"
+                   required style="width:240px;">
+            <div id="autocomplete-list" class="autocomplete-list"></div>
           </div>
           <div class="field">
             <label>종목명</label>
