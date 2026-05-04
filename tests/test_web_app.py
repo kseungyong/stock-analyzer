@@ -3,6 +3,7 @@ import pytest
 import yaml
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 # 테스트용 설정 파일을 임시 경로로 교체
 _MINIMAL_CONFIG = {
@@ -102,3 +103,40 @@ class TestJobs:
         resp = client.get("/jobs/nonexistent/download")
         assert resp.status_code == 200
         assert "다운로드할 리포트".encode() in resp.data
+
+
+class TestApiStocksSearch:
+    def test_returns_results(self, client):
+        with patch("src.web_app.search_stocks") as m:
+            m.return_value = [{"symbol": "AAPL", "name": "Apple Inc.", "market": "us"}]
+            resp = client.get("/api/stocks/search?q=apple")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data == [{"symbol": "AAPL", "name": "Apple Inc.", "market": "us"}]
+            m.assert_called_once_with("apple", limit=10)
+
+    def test_short_query_returns_empty(self, client):
+        with patch("src.web_app.search_stocks") as m:
+            resp = client.get("/api/stocks/search?q=a")
+            assert resp.status_code == 200
+            assert resp.get_json() == []
+            m.assert_not_called()
+
+    def test_invalid_chars_returns_empty(self, client):
+        with patch("src.web_app.search_stocks") as m:
+            resp = client.get("/api/stocks/search?q=DROP%20TABLE%3B")
+            assert resp.status_code == 200
+            assert resp.get_json() == []
+            m.assert_not_called()
+
+    def test_too_long_query_returns_empty(self, client):
+        with patch("src.web_app.search_stocks") as m:
+            resp = client.get("/api/stocks/search?q=" + "a" * 51)
+            assert resp.status_code == 200
+            assert resp.get_json() == []
+            m.assert_not_called()
+
+    def test_missing_q_returns_empty(self, client):
+        resp = client.get("/api/stocks/search")
+        assert resp.status_code == 200
+        assert resp.get_json() == []

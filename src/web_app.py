@@ -1,6 +1,7 @@
 """Flask 웹 대시보드 — 종목 분석, 추가/삭제, 리포트 조회."""
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -11,9 +12,12 @@ import yaml
 from flask import Flask, request, redirect, url_for, jsonify, Response
 from markupsafe import escape
 
-from src.validators import validate_stock_symbol, validate_stock_name, sanitize_stock_symbol
+from src.validators import validate_stock_symbol, validate_stock_name, sanitize_stock_symbol, is_valid_search_query
+from src.stock_search import search_stocks
 
 app = Flask(__name__)
+
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
 
@@ -390,6 +394,20 @@ def api_job_status(job_id: str):
     if not job:
         return jsonify({"error": "not found"}), 404
     return jsonify({"status": job["status"], "symbol": job["symbol"], "name": job["name"]})
+
+
+@app.route("/api/stocks/search")
+def api_stocks_search():
+    """종목 자동완성 검색 API. 빈/잘못된 쿼리는 빈 배열을 반환."""
+    q = request.args.get("q", "").strip()
+    if not is_valid_search_query(q) or len(q) < 2:
+        return jsonify([])
+    try:
+        results = search_stocks(q, limit=10)
+    except Exception as e:
+        logger.warning("종목 검색 실패: q=%s error=%s", q, e)
+        return jsonify([])
+    return jsonify(results)
 
 
 @app.route("/stocks/add", methods=["POST"])
