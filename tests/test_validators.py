@@ -1,6 +1,6 @@
 """src/validators.py 단위 테스트."""
 import pytest
-from src.validators import validate_stock_symbol, sanitize_stock_symbol, validate_stock_name
+from src.validators import validate_stock_symbol, sanitize_stock_symbol, validate_stock_name, is_valid_search_query
 
 
 class TestValidateStockSymbol:
@@ -64,9 +64,6 @@ class TestSanitizeStockSymbol:
 
     def test_mixed(self):
         assert sanitize_stock_symbol(" msft ") == "MSFT"
-
-
-from src.validators import is_valid_search_query
 
 
 class TestIsValidSearchQuery:
