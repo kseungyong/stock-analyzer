@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -62,3 +63,49 @@ def init_db() -> None:
         with closing(_connect()) as conn:
             conn.executescript(_SCHEMA)
     logger.info("predictions DB 초기화 완료: %s", _DB_PATH)
+
+
+# 모델 식별자 매핑: run_prediction 출력 키 → DB model 컬럼
+_MODEL_KEY_MAP = {
+    "random_forest": "rf",
+    "lightgbm": "lgbm",
+    "lstm": "lstm",
+    "transformer": "transformer",
+    "ensemble": "ensemble",
+}
+
+
+def insert_live(
+    symbol: str,
+    predictions: dict,
+    base_close: float,
+    target_date: int,
+) -> None:
+    """live 예측 5개 모델을 일괄 저장. UNIQUE 충돌 시 INSERT OR IGNORE."""
+    now_unix = int(time.time())
+    rows = []
+    for src_key, db_model in _MODEL_KEY_MAP.items():
+        pred = predictions.get(src_key)
+        if not pred or "error" in pred:
+            continue
+        direction = pred.get("direction")
+        if direction not in ("상승", "하락"):
+            continue  # "데이터 부족" 등은 스킵
+        confidence = float(pred.get("confidence", 0.0))
+        rows.append((
+            symbol, now_unix, target_date, db_model,
+            direction, confidence, base_close, "live", None,
+        ))
+
+    if not rows:
+        return
+
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            conn.executemany(
+                """INSERT OR IGNORE INTO predictions
+                   (symbol, ts, target_date, model, direction, confidence,
+                    base_close, source, backtest_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
