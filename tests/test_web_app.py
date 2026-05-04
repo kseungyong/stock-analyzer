@@ -140,3 +140,21 @@ class TestApiStocksSearch:
         resp = client.get("/api/stocks/search")
         assert resp.status_code == 200
         assert resp.get_json() == []
+
+    def test_search_exception_returns_empty(self, client):
+        with patch("src.web_app.search_stocks", side_effect=RuntimeError("boom")) as m:
+            resp = client.get("/api/stocks/search?q=apple")
+            assert resp.status_code == 200
+            assert resp.get_json() == []
+            m.assert_called_once_with("apple", limit=10)
+
+    def test_korean_query(self, client):
+        with patch("src.web_app.search_stocks") as m:
+            m.return_value = [{"symbol": "005930.KS", "name": "삼성전자", "market": "korea"}]
+            resp = client.get("/api/stocks/search?q=삼성")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data == [{"symbol": "005930.KS", "name": "삼성전자", "market": "korea"}]
+            # 한글이 unicode-escape되지 않고 그대로 응답에 포함되어야 함
+            assert "삼성전자".encode("utf-8") in resp.data
+            m.assert_called_once_with("삼성", limit=10)

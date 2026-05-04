@@ -16,6 +16,7 @@ from src.validators import validate_stock_symbol, validate_stock_name, sanitize_
 from src.stock_search import search_stocks
 
 app = Flask(__name__)
+app.json.ensure_ascii = False  # Korean 종목명을 JSON에 그대로 출력 (응답 크기 절감)
 
 logger = logging.getLogger(__name__)
 
