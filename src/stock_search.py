@@ -77,10 +77,10 @@ def _search_kr(query: str, limit: int) -> list[dict]:
 
 
 _US_ALLOWED_TYPES = {"EQUITY", "ETF"}
-_KR_EXCHANGES = {"KSC", "KOE"}  # 한국 거래소 코드
+_KR_EXCHANGES = {"KSC", "KOE", "KSQ"}  # 한국 거래소 코드 (KOSPI: KSC, KOSDAQ: KOE/KSQ)
 
 
-def _fetch_yf_search(query: str, max_results: int):
+def _fetch_yf_search(query: str, max_results: int) -> object:
     """yfinance Search 호출 격리. quotes 속성을 가진 객체 반환."""
     import yfinance as yf
     return yf.Search(query, max_results=max_results)
@@ -90,9 +90,9 @@ def _search_us(query: str, limit: int) -> list[dict]:
     """yfinance Search로 미국 주식/ETF 검색. 한국 거래소 결과는 제외."""
     try:
         search = _fetch_yf_search(query, max_results=max(limit, 8))
-        quotes = getattr(search, "quotes", None) or []
+        quotes = search.quotes or []
     except Exception as e:
-        logger.warning("yfinance Search 실패: %s", e)
+        logger.warning("yfinance Search 실패 (%s): %s", type(e).__name__, e)
         return []
 
     results = []

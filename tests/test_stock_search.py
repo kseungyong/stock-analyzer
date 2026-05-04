@@ -93,6 +93,7 @@ class _FakeSearch:
 class TestUSSearch:
     @pytest.fixture(autouse=True)
     def reset_krx_cache(self):
+        """각 테스트 사이에 KRX 캐시를 초기화."""
         import src.stock_search as ss
         ss._krx_cache["loaded_at"] = None
         ss._krx_cache["data"] = []
@@ -149,8 +150,9 @@ class TestUSSearch:
 
     @patch("src.stock_search._fetch_yf_search")
     @patch("src.stock_search._fetch_krx_listing")
-    def test_dedup_by_symbol(self, krx_mock, yf_mock):
-        # KRX와 yfinance 양쪽 모두 005930.KS 반환 — 한 번만 등장
+    def test_kr_wins_when_us_returns_korean_symbol(self, krx_mock, yf_mock):
+        # yfinance가 KSC 거래소 코드로 한국 심볼을 반환하면 _KR_EXCHANGES 필터에서 걸려 US 결과에 포함되지 않는다.
+        # 결과적으로 KR 결과만 남아 한 번만 등장하며 market이 korea임을 검증.
         krx_mock.return_value = _FAKE_KRX_DF
         yf_mock.return_value = _FakeSearch([
             {"symbol": "005930.KS", "shortname": "Samsung Electronics", "quoteType": "EQUITY", "exchange": "KSC"},
@@ -159,3 +161,18 @@ class TestUSSearch:
         samsung = [r for r in results if r["symbol"] == "005930.KS"]
         assert len(samsung) == 1
         assert samsung[0]["market"] == "korea"
+
+    @patch("src.stock_search._search_us")
+    @patch("src.stock_search._search_kr")
+    def test_search_stocks_dedup_keeps_kr(self, kr_mock, us_mock):
+        """search_stocks의 dedup 루프 자체를 검증한다 (필터 우회).
+
+        같은 심볼이 KR/US 양쪽에서 반환되면 KR 결과가 유지되어야 한다.
+        실제 필터에서는 도달 불가능하지만, 향후 필터가 변경되어도 중복 방지가
+        동작하는지 보장하기 위한 방어 코드 검증.
+        """
+        kr_mock.return_value = [{"symbol": "FOO.KS", "name": "Foo (KR)", "market": "korea"}]
+        us_mock.return_value = [{"symbol": "FOO.KS", "name": "Foo (US)", "market": "us"}]
+        results = search_stocks("foo")
+        assert len(results) == 1
+        assert results[0]["market"] == "korea"
