@@ -5,3 +5,5 @@ __pycache__/
 *.html
 .DS_Store
 .cache/
+.claude/
+logs/

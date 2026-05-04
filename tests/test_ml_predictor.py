@@ -31,9 +31,11 @@ from src.ml_predictor import (
 def _make_df(n: int = 120, seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     close = 50_000 + np.cumsum(rng.normal(0, 500, n))
+    volume = rng.integers(1_000_000, 5_000_000, n).astype(float)
     idx = pd.date_range("2024-01-01", periods=n, freq="B")
-    df = pd.DataFrame({"Close": close}, index=idx)
-    # 기술 지표 수동 계산 (compute_indicators 없이 간단하게)
+    df = pd.DataFrame({"Close": close, "Volume": volume}, index=idx)
+    # 기술 지표 수동 계산 (compute_indicators 없이 간단하게).
+    # _CLF_FEATURES 17개 모두 포함해야 ml_predictor의 dropna(subset=...) 통과.
     df["MA5"] = df["Close"].rolling(5).mean()
     df["MA20"] = df["Close"].rolling(20).mean()
     df["RSI"] = 50.0
@@ -41,6 +43,16 @@ def _make_df(n: int = 120, seed: int = 0) -> pd.DataFrame:
     df["MACD_Hist"] = 0.0
     df["BB_Upper"] = df["Close"] * 1.02
     df["BB_Lower"] = df["Close"] * 0.98
+    df["Volume_Ratio"] = 1.0
+    df["Stoch_K"] = 50.0
+    df["Stoch_D"] = 50.0
+    df["ATR_pct"] = 1.5
+    df["OBV_Change"] = 0.0
+    df["Williams_R"] = -50.0
+    df["CCI"] = 0.0
+    df["Return_1d"] = df["Close"].pct_change(1)
+    df["Return_5d"] = df["Close"].pct_change(5)
+    df["Return_20d"] = df["Close"].pct_change(20)
     return df
 
 
