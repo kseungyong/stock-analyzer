@@ -492,6 +492,7 @@ body {
 /* ── Job detail ── */
 .result-frame { margin-top: 16px; }
 
+/* z-index scale: topbar 30, autocomplete-list 20 */
 /* ── Autocomplete ── */
 .autocomplete-wrap { position: relative; }
 .autocomplete-list {
@@ -633,11 +634,14 @@ def index():
         {_csrf_input()}
         <div class="add-form">
           <div class="field autocomplete-wrap">
-            <label>검색</label>
+            <label for="stock-search-input">검색</label>
             <input name="symbol" id="stock-search-input"
+                   role="combobox" aria-autocomplete="list"
+                   aria-expanded="false" aria-controls="autocomplete-list"
                    placeholder="종목명 또는 심볼 검색" autocomplete="off"
                    required style="width:240px;">
-            <div id="autocomplete-list" class="autocomplete-list"></div>
+            <div id="autocomplete-list" class="autocomplete-list"
+                 role="listbox" aria-label="종목 검색 결과"></div>
           </div>
           <div class="field">
             <label>종목명</label>
