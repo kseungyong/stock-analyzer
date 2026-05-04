@@ -1,4 +1,9 @@
 """src/stock_search.py 단위 테스트."""
+from unittest.mock import patch
+
+import pandas as pd
+import pytest
+
 from src.stock_search import search_stocks
 
 
@@ -11,11 +16,6 @@ class TestShortQuery:
 
     def test_whitespace_only_returns_empty_list(self):
         assert search_stocks("   ") == []
-
-
-import pytest
-import pandas as pd
-from unittest.mock import patch
 
 
 _FAKE_KRX_DF = pd.DataFrame([
