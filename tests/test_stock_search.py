@@ -82,3 +82,80 @@ class TestKoreaSearch:
         results = search_stocks("삼성")
         samsung = [r for r in results if r["symbol"] == "005930.KS"]
         assert len(samsung) == 1
+
+
+class _FakeSearch:
+    """yf.Search mock — `quotes` 속성을 노출."""
+    def __init__(self, quotes):
+        self.quotes = quotes
+
+
+class TestUSSearch:
+    @pytest.fixture(autouse=True)
+    def reset_krx_cache(self):
+        import src.stock_search as ss
+        ss._krx_cache["loaded_at"] = None
+        ss._krx_cache["data"] = []
+        yield
+
+    @patch("src.stock_search._fetch_yf_search")
+    @patch("src.stock_search._fetch_krx_listing", return_value=pd.DataFrame())
+    def test_us_quote_returned(self, _krx, yf_mock):
+        yf_mock.return_value = _FakeSearch([
+            {"symbol": "AAPL", "shortname": "Apple Inc.", "quoteType": "EQUITY", "exchange": "NMS"},
+        ])
+        results = search_stocks("apple")
+        assert results == [{"symbol": "AAPL", "name": "Apple Inc.", "market": "us"}]
+
+    @patch("src.stock_search._fetch_yf_search")
+    @patch("src.stock_search._fetch_krx_listing", return_value=pd.DataFrame())
+    def test_excludes_non_equity_etf(self, _krx, yf_mock):
+        yf_mock.return_value = _FakeSearch([
+            {"symbol": "BTC-USD", "shortname": "Bitcoin", "quoteType": "CRYPTOCURRENCY", "exchange": "CCC"},
+            {"symbol": "SPY", "shortname": "SPDR S&P 500", "quoteType": "ETF", "exchange": "PCX"},
+        ])
+        results = search_stocks("spy")
+        symbols = [r["symbol"] for r in results]
+        assert "SPY" in symbols
+        assert "BTC-USD" not in symbols
+
+    @patch("src.stock_search._fetch_yf_search")
+    @patch("src.stock_search._fetch_krx_listing", return_value=pd.DataFrame())
+    def test_excludes_korean_exchange(self, _krx, yf_mock):
+        yf_mock.return_value = _FakeSearch([
+            {"symbol": "005930.KS", "shortname": "Samsung Electronics", "quoteType": "EQUITY", "exchange": "KSC"},
+            {"symbol": "AAPL", "shortname": "Apple Inc.", "quoteType": "EQUITY", "exchange": "NMS"},
+        ])
+        results = search_stocks("app")
+        symbols = [r["symbol"] for r in results]
+        assert "AAPL" in symbols
+        assert "005930.KS" not in symbols
+
+    @patch("src.stock_search._fetch_yf_search", side_effect=RuntimeError("api"))
+    @patch("src.stock_search._fetch_krx_listing", return_value=pd.DataFrame())
+    def test_us_failure_returns_empty(self, _krx, _yf):
+        assert search_stocks("apple") == []
+
+    @patch("src.stock_search._fetch_yf_search")
+    @patch("src.stock_search._fetch_krx_listing")
+    def test_korea_first_then_us(self, krx_mock, yf_mock):
+        krx_mock.return_value = _FAKE_KRX_DF
+        yf_mock.return_value = _FakeSearch([
+            {"symbol": "AAPL", "shortname": "Apple Inc.", "quoteType": "EQUITY", "exchange": "NMS"},
+        ])
+        # 'ap' — KRX fake 데이터엔 매칭 없음, yfinance만 응답 → US 결과만 반환
+        results = search_stocks("ap")
+        assert results == [{"symbol": "AAPL", "name": "Apple Inc.", "market": "us"}]
+
+    @patch("src.stock_search._fetch_yf_search")
+    @patch("src.stock_search._fetch_krx_listing")
+    def test_dedup_by_symbol(self, krx_mock, yf_mock):
+        # KRX와 yfinance 양쪽 모두 005930.KS 반환 — 한 번만 등장
+        krx_mock.return_value = _FAKE_KRX_DF
+        yf_mock.return_value = _FakeSearch([
+            {"symbol": "005930.KS", "shortname": "Samsung Electronics", "quoteType": "EQUITY", "exchange": "KSC"},
+        ])
+        results = search_stocks("삼성")
+        samsung = [r for r in results if r["symbol"] == "005930.KS"]
+        assert len(samsung) == 1
+        assert samsung[0]["market"] == "korea"

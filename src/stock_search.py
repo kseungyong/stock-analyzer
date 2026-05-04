@@ -76,9 +76,43 @@ def _search_kr(query: str, limit: int) -> list[dict]:
     return results
 
 
+_US_ALLOWED_TYPES = {"EQUITY", "ETF"}
+_KR_EXCHANGES = {"KSC", "KOE"}  # 한국 거래소 코드
+
+
+def _fetch_yf_search(query: str, max_results: int):
+    """yfinance Search 호출 격리. quotes 속성을 가진 객체 반환."""
+    import yfinance as yf
+    return yf.Search(query, max_results=max_results)
+
+
 def _search_us(query: str, limit: int) -> list[dict]:
-    """미국 종목 검색 (Task 4에서 구현)."""
-    return []
+    """yfinance Search로 미국 주식/ETF 검색. 한국 거래소 결과는 제외."""
+    try:
+        search = _fetch_yf_search(query, max_results=max(limit, 8))
+        quotes = getattr(search, "quotes", None) or []
+    except Exception as e:
+        logger.warning("yfinance Search 실패: %s", e)
+        return []
+
+    results = []
+    for q in quotes:
+        if not isinstance(q, dict):
+            continue
+        symbol = str(q.get("symbol", "")).strip()
+        if not symbol:
+            continue
+        qtype = str(q.get("quoteType", "")).upper()
+        if qtype not in _US_ALLOWED_TYPES:
+            continue
+        exchange = str(q.get("exchange", "")).upper()
+        if exchange in _KR_EXCHANGES or symbol.endswith((".KS", ".KQ")):
+            continue
+        name = str(q.get("shortname") or q.get("longname") or symbol).strip()
+        results.append({"symbol": symbol, "name": name, "market": "us"})
+        if len(results) >= limit:
+            break
+    return results
 
 
 def search_stocks(query: str, limit: int = 10) -> list[dict]:
