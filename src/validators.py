@@ -54,3 +54,20 @@ def sanitize_stock_symbol(symbol: str) -> str:
         정리된 심볼 (공백 제거, 대문자 변환)
     """
     return symbol.strip().upper()
+
+
+SEARCH_QUERY_MAX_LEN = 50
+_SEARCH_QUERY_PATTERN = re.compile(r'^[A-Za-z0-9가-힣 .\-]+$')
+
+
+def is_valid_search_query(query: str) -> bool:
+    """검색 쿼리의 유효성을 검증한다.
+
+    허용: 영문자/숫자/한글/공백/점(.)/하이픈(-). 길이 1-50자(strip 후).
+    """
+    if not query or not isinstance(query, str):
+        return False
+    stripped = query.strip()
+    if not stripped or len(stripped) > SEARCH_QUERY_MAX_LEN:
+        return False
+    return bool(_SEARCH_QUERY_PATTERN.match(stripped))
