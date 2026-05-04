@@ -537,6 +537,7 @@ _AUTOCOMPLETE_JS = """
   let timer = null;
   let activeIdx = -1;
   let items = [];
+  let currentFetchId = 0;
 
   function close() {
     list.classList.remove('open');
@@ -559,6 +560,7 @@ _AUTOCOMPLETE_JS = """
   function highlight(idx) {
     [...list.querySelectorAll('.autocomplete-item')].forEach((el, i) => {
       el.classList.toggle('active', i === idx);
+      el.setAttribute('aria-selected', i === idx ? 'true' : 'false');
     });
     if (idx >= 0) {
       input.setAttribute('aria-activedescendant', 'autocomplete-item-' + idx);
@@ -580,6 +582,7 @@ _AUTOCOMPLETE_JS = """
         it.className = 'autocomplete-item';
         it.id = 'autocomplete-item-' + i;
         it.setAttribute('role', 'option');
+        it.setAttribute('aria-selected', 'false');
         const left = document.createElement('div');
         const name = document.createElement('span');
         name.className = 'ac-name';
@@ -609,12 +612,17 @@ _AUTOCOMPLETE_JS = """
     const q = input.value.trim();
     if (q.length < 2) { close(); return; }
     timer = setTimeout(async () => {
+      const fetchId = ++currentFetchId;
       try {
         const res = await fetch('/api/stocks/search?q=' + encodeURIComponent(q));
+        if (fetchId !== currentFetchId) return;  // 더 새로운 검색이 시작됨 — 무시
         if (!res.ok) { close(); return; }
         const data = await res.json();
+        if (fetchId !== currentFetchId) return;
         render(Array.isArray(data) ? data : []);
-      } catch { close(); }
+      } catch (err) {
+        if (fetchId === currentFetchId) close();
+      }
     }, 300);
   });
 
