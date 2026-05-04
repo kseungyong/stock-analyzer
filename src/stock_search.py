@@ -32,12 +32,12 @@ def _load_krx_cache() -> list[dict]:
     now = time.time()
     loaded_at = _krx_cache["loaded_at"]
     if loaded_at is not None and (now - loaded_at) < _KRX_TTL_SECONDS:
-        return list(_krx_cache["data"])
+        return [dict(item) for item in _krx_cache["data"]]
 
     with _krx_lock:
         loaded_at = _krx_cache["loaded_at"]
         if loaded_at is not None and (now - loaded_at) < _KRX_TTL_SECONDS:
-            return list(_krx_cache["data"])
+            return [dict(item) for item in _krx_cache["data"]]
         try:
             df = _fetch_krx_listing()
             data = []
@@ -52,7 +52,7 @@ def _load_krx_cache() -> list[dict]:
             _krx_cache["data"] = data
             _krx_cache["loaded_at"] = now
             logger.info("KRX 캐시 로드 완료: %d 종목", len(data))
-            return list(data)
+            return [dict(item) for item in data]
         except Exception as e:
             logger.warning("KRX 캐시 로드 실패: %s", e)
             return []
@@ -83,7 +83,7 @@ _KR_EXCHANGES = {"KSC", "KOE", "KSQ"}  # 한국 거래소 코드 (KOSPI: KSC, KO
 def _fetch_yf_search(query: str, max_results: int) -> object:
     """yfinance Search 호출 격리. quotes 속성을 가진 객체 반환."""
     import yfinance as yf
-    return yf.Search(query, max_results=max_results)
+    return yf.Search(query, max_results=max_results, timeout=5)
 
 
 def _search_us(query: str, limit: int) -> list[dict]:

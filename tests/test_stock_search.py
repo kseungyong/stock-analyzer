@@ -125,12 +125,14 @@ class TestUSSearch:
     def test_excludes_korean_exchange(self, _krx, yf_mock):
         yf_mock.return_value = _FakeSearch([
             {"symbol": "005930.KS", "shortname": "Samsung Electronics", "quoteType": "EQUITY", "exchange": "KSC"},
+            {"symbol": "247540.KQ", "shortname": "EcoPro BM", "quoteType": "EQUITY", "exchange": "KSQ"},
             {"symbol": "AAPL", "shortname": "Apple Inc.", "quoteType": "EQUITY", "exchange": "NMS"},
         ])
         results = search_stocks("app")
         symbols = [r["symbol"] for r in results]
         assert "AAPL" in symbols
         assert "005930.KS" not in symbols
+        assert "247540.KQ" not in symbols
 
     @patch("src.stock_search._fetch_yf_search", side_effect=RuntimeError("api"))
     @patch("src.stock_search._fetch_krx_listing", return_value=pd.DataFrame())
