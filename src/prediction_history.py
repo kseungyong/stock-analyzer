@@ -185,3 +185,39 @@ def backfill_inline(symbol: str, df: pd.DataFrame) -> int:
                     conn.execute("ROLLBACK")
                     raise
             return len(updates)
+
+
+def backfill_all(fetch_fn) -> dict:
+    """cron용 전체 백필 — 미평가 + target_date < now 인 예측을 심볼별 일괄 평가.
+
+    Args:
+        fetch_fn: callable(symbol) -> pd.DataFrame. 외부 API 의존성 주입.
+
+    Returns: {'evaluated': N, 'failed_symbols': [...]}
+    """
+    now_unix = int(time.time())
+    with closing(_connect()) as conn:
+        cur = conn.execute(
+            """SELECT DISTINCT symbol FROM predictions
+               WHERE actual_close IS NULL AND target_date < ?""",
+            (now_unix,),
+        )
+        symbols = [r[0] for r in cur.fetchall()]
+
+    total_evaluated = 0
+    failed = []
+    for symbol in symbols:
+        try:
+            df = fetch_fn(symbol)
+        except Exception as e:
+            logger.warning("backfill_all fetch 실패: %s — %s", symbol, e)
+            failed.append(symbol)
+            continue
+        try:
+            count = backfill_inline(symbol, df)
+            total_evaluated += count
+        except Exception as e:
+            logger.warning("backfill_all 평가 실패: %s — %s", symbol, e)
+            failed.append(symbol)
+
+    return {"evaluated": total_evaluated, "failed_symbols": failed}

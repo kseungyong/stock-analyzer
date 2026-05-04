@@ -1,5 +1,6 @@
 """src/prediction_history.py 단위 테스트."""
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -316,3 +317,74 @@ class TestBackfillInline:
         for row in rows:
             assert row[0] is None  # actual_close
             assert row[1] is None  # hit
+
+
+class TestBackfillAll:
+    def _df_for(self, prices_by_date):
+        idx = pd.DatetimeIndex(list(prices_by_date.keys()))
+        return pd.DataFrame({"Close": list(prices_by_date.values())}, index=idx)
+
+    def _target_date_unix(self, date_str):
+        ts = pd.Timestamp(date_str, tz="Asia/Seoul").normalize()
+        return int(ts.tz_convert("UTC").timestamp())
+
+    def test_groups_by_symbol(self, tmp_db):
+        ph.init_db()
+        ph.insert_live("AAPL", {"random_forest": {"direction": "상승", "confidence": 65.0}},
+                       50000.0, self._target_date_unix("2026-05-01"))
+        ph.insert_live("MSFT", {"random_forest": {"direction": "하락", "confidence": 60.0}},
+                       50000.0, self._target_date_unix("2026-05-01"))
+
+        call_log = []
+
+        def fetch_fn(symbol):
+            call_log.append(symbol)
+            return self._df_for({"2026-05-01": 51000.0 if symbol == "AAPL" else 49000.0})
+
+        result = ph.backfill_all(fetch_fn=fetch_fn)
+        assert result["evaluated"] == 2
+        assert sorted(call_log) == ["AAPL", "MSFT"]
+
+    def test_skips_when_no_unevaluated(self, tmp_db):
+        ph.init_db()
+
+        called = []
+        def fetch_fn(symbol):
+            called.append(symbol)
+            return pd.DataFrame()
+
+        result = ph.backfill_all(fetch_fn=fetch_fn)
+        assert result["evaluated"] == 0
+        assert called == []
+
+    def test_partial_failure(self, tmp_db):
+        ph.init_db()
+        ph.insert_live("AAPL", {"random_forest": {"direction": "상승", "confidence": 65.0}},
+                       50000.0, self._target_date_unix("2026-05-01"))
+        ph.insert_live("BAD", {"random_forest": {"direction": "상승", "confidence": 65.0}},
+                       50000.0, self._target_date_unix("2026-05-01"))
+
+        def fetch_fn(symbol):
+            if symbol == "BAD":
+                raise RuntimeError("network")
+            return self._df_for({"2026-05-01": 51000.0})
+
+        result = ph.backfill_all(fetch_fn=fetch_fn)
+        assert result["evaluated"] == 1
+        assert "BAD" in result["failed_symbols"]
+
+    def test_only_past_target_dates(self, tmp_db):
+        """미래 target_date는 스킵."""
+        ph.init_db()
+        future = int(time.time()) + 3600 * 24 * 30  # 30일 후
+        ph.insert_live("AAPL", {"random_forest": {"direction": "상승", "confidence": 65.0}},
+                       50000.0, future)
+
+        called = []
+        def fetch_fn(symbol):
+            called.append(symbol)
+            return pd.DataFrame()
+
+        result = ph.backfill_all(fetch_fn=fetch_fn)
+        assert called == []
+        assert result["evaluated"] == 0
