@@ -1,0 +1,139 @@
+body {
+  font-family: Arial, sans-serif;
+  max-width: 800px;
+  margin: auto;
+  padding: 20px;
+}
+
+h1 {
+  margin-bottom: 4px;
+}
+
+.generated-at {
+  color: #666;
+  margin-bottom: 16px;
+}
+
+.disclaimer {
+  color: #999;
+  font-size: 0.85em;
+  margin-top: 20px;
+}
+
+/* 종목 카드 */
+.stock-card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.stock-card h3 {
+  margin: 0 0 8px;
+}
+
+.stock-summary {
+  margin: 4px 0;
+}
+
+.stock-reasons {
+  font-size: 0.9em;
+  margin: 4px 0;
+}
+
+/* 매매 신호 색상 */
+.signal-buy   { color: #28a745; font-weight: bold; }
+.signal-sell  { color: #dc3545; font-weight: bold; }
+.signal-hold  { color: #6c757d; font-weight: bold; }
+
+/* 분석 테이블 공통 */
+.analysis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 8px 0;
+}
+
+.analysis-table th {
+  background: #f0f0f0;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.analysis-table td {
+  padding: 4px 8px;
+}
+
+.analysis-table td.label {
+  font-weight: bold;
+}
+
+.analysis-table td.accent {
+  font-weight: bold;
+  color: #0066cc;
+}
+
+/* 감성 분석 박스 */
+.sentiment-box {
+  margin-top: 10px;
+  padding: 10px;
+  background: #f5f7fa;
+  border-radius: 6px;
+  border-left: 4px solid currentColor;
+}
+
+.sentiment-box h4 {
+  margin: 0 0 4px;
+  color: #333;
+}
+
+.sentiment-box p {
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.sentiment-score {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.sentiment-error {
+  font-size: 0.9em;
+  color: #dc3545;
+}
+
+/* 차트 이미지 */
+.stock-chart {
+  width: 100%;
+  max-width: 700px;
+  margin-top: 8px;
+}
+
+/* 뉴스 */
+.news-list {
+  font-size: 0.9em;
+  padding-left: 20px;
+}
+
+.news-item {
+  margin: 6px 0;
+}
+
+.news-link {
+  color: #0066cc;
+}
+
+.news-publisher {
+  color: #999;
+}
+
+.news-summary {
+  display: block;
+  color: #555;
+  font-size: 0.85em;
+}
+
+/* 섹션 제목 */
+.section-title {
+  margin: 12px 0 4px;
+}

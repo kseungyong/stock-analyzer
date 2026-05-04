@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
@@ -6,7 +7,7 @@ import pytz
 logger = logging.getLogger(__name__)
 
 
-def start_scheduler(job_func, config: dict) -> None:
+def start_scheduler(job_func: Callable[[], None], config: dict) -> None:
     """APScheduler로 매일 지정 시간에 job_func을 실행한다.
 
     Args:

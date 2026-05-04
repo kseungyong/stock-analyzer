@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
 
+# .env 파일 자동 로드
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from src.data_fetcher import fetch_stock_data, fetch_multiple, fetch_news
 from src.technical_analysis import compute_indicators, generate_signal
-from src.ml_predictor import run_prediction
+from src.prediction_engine import PredictionEngine
 from src.report_generator import generate_report
 from src.email_sender import send_report
 from src.scheduler import start_scheduler
 from src.validators import validate_stock_symbol, sanitize_stock_symbol
+
+_engine = PredictionEngine()
 
 
 logging.basicConfig(
@@ -60,9 +71,15 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
         df = fetch_stock_data(symbol)
         df = compute_indicators(df)
         signal = generate_signal(df)
-        prediction = run_prediction(df, cache_key=symbol)
-        news = fetch_news(symbol)
+
         from src.ml_predictor import analyze_sentiment
+        # ML 예측과 뉴스 수집을 동시에 실행
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fut_pred = ex.submit(_engine.run, df, symbol)
+            fut_news = ex.submit(fetch_news, symbol)
+            prediction = fut_pred.result()
+            news = fut_news.result()
+
         sentiment = analyze_sentiment(news)
 
         return {
@@ -85,11 +102,19 @@ def run_full_analysis(config: dict) -> str | None:
     logger.info("분석 시작: %d개 종목", len(stocks))
 
     analyses = []
-    for stock in stocks:
-        logger.info("분석 중: %s (%s)", stock["name"], stock["symbol"])
-        result = analyze_stock(stock["symbol"], stock["name"])
-        if result:
-            analyses.append(result)
+    # 종목별 분석을 병렬로 실행 (ML은 CPU 집약적이므로 max_workers 제한)
+    max_workers = min(len(stocks), 3)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        future_to_stock = {
+            ex.submit(analyze_stock, s["symbol"], s["name"]): s
+            for s in stocks
+        }
+        for future in as_completed(future_to_stock):
+            s = future_to_stock[future]
+            logger.info("분석 중: %s (%s)", s["name"], s["symbol"])
+            result = future.result()
+            if result:
+                analyses.append(result)
 
     if not analyses:
         logger.warning("분석 결과 없음")
@@ -108,19 +133,58 @@ def daily_job():
         send_report(html, config["email"])
 
 
+def run_scan(args):
+    """수급/모멘텀 스캐너 실행."""
+    from src.supply_scanner import scan_supply, scan_momentum, format_scan_result
+
+    mode = args.mode
+    days = args.days
+    top_n = args.top
+
+    if mode in ("supply", "all"):
+        logger.info("외인/기관 수급 스캔 시작 (최근 %d일, 상위 %d개)", days, top_n)
+        results = scan_supply(days=days, top_n=top_n)
+        print(f"\n[외인/기관 동시 순매수 상위 {top_n}개 — 최근 {days}일]")
+        print(format_scan_result(results, mode="supply"))
+        print()
+
+    if mode in ("momentum", "all"):
+        m_days = args.days if args.days != 5 else 20  # momentum 기본값 20일
+        logger.info("모멘텀 스캔 시작 (최근 %d일, 상위 %d개)", m_days, top_n)
+        results = scan_momentum(days=m_days, top_n=top_n)
+        print(f"\n[모멘텀 상위 {top_n}개 — 최근 {m_days}일]")
+        print(format_scan_result(results, mode="momentum"))
+        print()
+
+
 def main():
     parser = argparse.ArgumentParser(description="주식시장 분석 시스템")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # scan 서브커맨드
+    scan_parser = subparsers.add_parser("scan", help="외인/기관 수급 스캐너")
+    scan_parser.add_argument("--mode", choices=["supply", "momentum", "all"],
+                             default="supply", help="스캔 모드 (기본: supply)")
+    scan_parser.add_argument("--days", type=int, default=5, help="조회 기간 (기본: 5일)")
+    scan_parser.add_argument("--top", type=int, default=20, help="상위 N개 (기본: 20)")
+
+    # 기존 옵션
     parser.add_argument("--run-now", action="store_true", help="즉시 분석 실행")
     parser.add_argument("--symbol", type=str, help="특정 종목 분석 (예: AAPL)")
     parser.add_argument("--start-scheduler", action="store_true", help="스케줄러 시작")
     parser.add_argument("--output", type=str, help="리포트 저장 경로 (HTML)")
     parser.add_argument("--web", action="store_true", help="웹 대시보드 실행 (기본 포트 5000)")
     parser.add_argument("--port", type=int, default=8080, help="웹 서버 포트 (기본: 8080)")
+    parser.add_argument("--prod", action="store_true", help="프로덕션 모드 (Gunicorn, --web 함께 사용)")
     args = parser.parse_args()
+
+    if args.command == "scan":
+        run_scan(args)
+        return
 
     if args.web:
         from src.web_app import run_web
-        run_web(port=args.port)
+        run_web(port=args.port, production=args.prod)
         return
 
     config = load_config()

@@ -4,6 +4,7 @@ import base64
 import html
 import io
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -11,6 +12,19 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as _fm
 import matplotlib.dates as mdates
 import pandas as pd
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+# CSS를 파일에서 로드한다. 파일이 없으면 빈 문자열을 사용한다.
+def _load_css() -> str:
+    css_path = _TEMPLATES_DIR / "report.css"
+    try:
+        return css_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+_REPORT_CSS = _load_css()
+
 
 # 크로스 플랫폼 한글 폰트 자동 감지
 def _detect_korean_font() -> str:
@@ -79,6 +93,151 @@ def _signal_color(signal: str) -> str:
     return {"매수": "#28a745", "매도": "#dc3545"}.get(signal, "#6c757d")
 
 
+def _signal_class(signal: str) -> str:
+    return {"매수": "signal-buy", "매도": "signal-sell"}.get(signal, "signal-hold")
+
+
+def _render_indicators_table(indicators: list[dict]) -> str:
+    """기술 지표 테이블 HTML을 반환한다."""
+    if not indicators:
+        return ""
+    rows = "".join(
+        f"<tr><td class='label'>{ind['name']}</td>"
+        f"<td>{ind['value']}</td>"
+        f"<td>{ind['comment']}</td></tr>"
+        for ind in indicators
+    )
+    return (
+        "<table class='analysis-table'>"
+        "<tr><th>지표</th><th>값</th><th>의견</th></tr>"
+        f"{rows}</table>"
+    )
+
+
+def _render_ml_table(pred: dict) -> str:
+    """ML 예측 결과 테이블 HTML을 반환한다."""
+    prophet = pred.get("prophet", {})
+    rf = pred.get("random_forest", {})
+    lgbm = pred.get("lightgbm", {})
+    lstm = pred.get("lstm", {})
+    transformer = pred.get("transformer", {})
+
+    rows = ""
+    if prophet and "error" not in prophet:
+        rows += (
+            f"<tr><td class='label'>Prophet</td>"
+            f"<td>{prophet['predicted_price']} ({prophet['change_pct']:+.1f}%)</td>"
+            f"<td>7일 후 예측</td></tr>"
+        )
+    rows += (
+        f"<tr><td class='label'>Random Forest</td>"
+        f"<td>{rf.get('direction', 'N/A')}</td>"
+        f"<td>신뢰도 {rf.get('confidence', 0)}%</td></tr>"
+    )
+    rows += (
+        f"<tr><td class='label'>LightGBM</td>"
+        f"<td>{lgbm.get('direction', 'N/A')}</td>"
+        f"<td>신뢰도 {lgbm.get('confidence', 0)}%</td></tr>"
+    )
+    if lstm and "error" not in lstm:
+        rows += (
+            f"<tr><td class='label'>LSTM</td>"
+            f"<td>{lstm.get('direction', 'N/A')}</td>"
+            f"<td>신뢰도 {lstm.get('confidence', 0)}%</td></tr>"
+        )
+    else:
+        rows += "<tr><td class='label'>LSTM</td><td colspan='2'>예측 불가</td></tr>"
+
+    if transformer and "error" not in transformer:
+        rows += (
+            f"<tr><td class='accent'>Transformer (Advanced)</td>"
+            f"<td>{transformer.get('direction', 'N/A')}</td>"
+            f"<td>신뢰도 {transformer.get('confidence', 0)}%</td></tr>"
+        )
+    else:
+        rows += "<tr><td class='accent'>Transformer (Advanced)</td><td colspan='2'>예측 불가</td></tr>"
+
+    return (
+        "<table class='analysis-table'>"
+        "<tr><th>모델</th><th>예측</th><th>비고</th></tr>"
+        f"{rows}</table>"
+    )
+
+
+def _render_news(news_items: list[dict]) -> str:
+    """뉴스 목록 HTML을 반환한다."""
+    if not news_items:
+        return ""
+    items_html = ""
+    for n in news_items:
+        title = n.get("title", "")
+        link = n.get("link", "")
+        publisher = n.get("publisher", "")
+        safe_title = html.escape(title)
+        safe_summary = html.escape(n.get("summary", ""))
+        safe_publisher = html.escape(publisher)
+        pub_tag = f' <span class="news-publisher">— {safe_publisher}</span>' if safe_publisher else ""
+        summary_tag = f'<span class="news-summary">{safe_summary}</span>' if safe_summary else ""
+        safe_link = link if link.startswith(("http://", "https://")) else ""
+        if safe_link:
+            items_html += (
+                f'<li class="news-item">'
+                f'<a class="news-link" href="{safe_link}" target="_blank">{safe_title}</a>'
+                f'{pub_tag}{summary_tag}</li>'
+            )
+        else:
+            items_html += f'<li class="news-item">{safe_title}{pub_tag}{summary_tag}</li>'
+    return f'<h4 class="section-title">관련 뉴스</h4><ul class="news-list">{items_html}</ul>'
+
+
+def _render_sentiment(sentiment: dict) -> str:
+    """감성 분석 결과 HTML을 반환한다."""
+    if not sentiment:
+        return ""
+    if "error" in sentiment:
+        return f'<p class="sentiment-error">[감성 분석 오류] {sentiment["error"]}</p>'
+    sent_label = sentiment.get("label", "N/A")
+    sent_score = sentiment.get("score", 0.0)
+    sent_color = "#2ca02c" if "긍정" in sent_label else ("#dc3545" if "부정" in sent_label else "#666")
+    return (
+        f'<div class="sentiment-box" style="border-left-color:{sent_color}; color:{sent_color};">'
+        f'<h4>뉴스 감성 분석 (FinBERT)</h4>'
+        f'<p>종합 의견: <strong>{sent_label}</strong> '
+        f'<span class="sentiment-score">(점수: {sent_score:+.3f})</span></p>'
+        f'</div>'
+    )
+
+
+def _render_stock_card(item: dict) -> str:
+    """종목 분석 카드 HTML을 반환한다."""
+    name = html.escape(item["name"])
+    symbol_esc = html.escape(item["symbol"])
+    sig = item["signal"]
+    pred = item["prediction"]
+    chart_b64 = _create_chart(item["df"], item["name"])
+
+    signal_cls = _signal_class(sig["signal"])
+    indicators_html = _render_indicators_table(sig.get("indicators", []))
+    ml_html = _render_ml_table(pred)
+    news_html = _render_news(item.get("news", []))
+    sentiment_html = _render_sentiment(item.get("sentiment", {}))
+
+    return f"""
+    <div class="stock-card">
+        <h3>{name} ({symbol_esc})</h3>
+        <p class="stock-summary">현재가: <b>{sig['close']:,.2f}</b> | RSI: {sig['rsi']}
+           | <span class="{signal_cls}">{sig['signal']}</span> (점수: {sig['score']})</p>
+        <p class="stock-reasons">{', '.join(sig['reasons']) if sig['reasons'] else '특이사항 없음'}</p>
+        {sentiment_html}
+        <h4 class="section-title">기술 지표 분석</h4>
+        {indicators_html}
+        <h4 class="section-title">ML 예측</h4>
+        {ml_html}
+        <img class="stock-chart" src="data:image/png;base64,{chart_b64}" alt="{name} chart"/>
+        {news_html}
+    </div>"""
+
+
 def generate_report(analyses: list[dict]) -> str:
     """HTML 리포트를 생성한다.
 
@@ -89,153 +248,21 @@ def generate_report(analyses: list[dict]) -> str:
         HTML 문자열
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    rows = []
+    cards = "".join(_render_stock_card(item) for item in analyses)
+    disclaimer = analyses[-1]["prediction"].get("disclaimer", "") if analyses else ""
 
-    for item in analyses:
-        name = html.escape(item["name"])
-        symbol_esc = html.escape(item["symbol"])
-        sig = item["signal"]
-        pred = item["prediction"]
-        chart_b64 = _create_chart(item["df"], item["name"])
-
-        prophet = pred.get("prophet", {})
-        rf = pred.get("random_forest", {})
-
-        # 기술 지표별 의견 테이블
-        ind_rows = ""
-        for ind in sig.get("indicators", []):
-            ind_rows += (
-                f"<tr><td style='padding:4px 8px; font-weight:bold;'>{ind['name']}</td>"
-                f"<td style='padding:4px 8px;'>{ind['value']}</td>"
-                f"<td style='padding:4px 8px;'>{ind['comment']}</td></tr>"
-            )
-        indicators_html = ""
-        if ind_rows:
-            indicators_html = (
-                "<table style='width:100%; border-collapse:collapse; font-size:0.9em; margin:8px 0;'>"
-                "<tr style='background:#f0f0f0;'><th style='padding:4px 8px; text-align:left;'>지표</th>"
-                "<th style='padding:4px 8px; text-align:left;'>값</th>"
-                "<th style='padding:4px 8px; text-align:left;'>의견</th></tr>"
-                f"{ind_rows}</table>"
-            )
-
-        # ML 예측 결과 테이블
-        ml_rows = ""
-        if "error" not in prophet:
-            ml_rows += (
-                f"<tr><td style='padding:4px 8px; font-weight:bold;'>Prophet</td>"
-                f"<td style='padding:4px 8px;'>{prophet['predicted_price']} ({prophet['change_pct']:+.1f}%)</td>"
-                f"<td style='padding:4px 8px;'>7일 후 예측</td></tr>"
-            )
-        ml_rows += (
-            f"<tr><td style='padding:4px 8px; font-weight:bold;'>Random Forest</td>"
-            f"<td style='padding:4px 8px;'>{rf.get('direction', 'N/A')}</td>"
-            f"<td style='padding:4px 8px;'>신뢰도 {rf.get('confidence', 0)}%</td></tr>"
-        )
-        lgbm = pred.get("lightgbm", {})
-        ml_rows += (
-            f"<tr><td style='padding:4px 8px; font-weight:bold;'>LightGBM</td>"
-            f"<td style='padding:4px 8px;'>{lgbm.get('direction', 'N/A')}</td>"
-            f"<td style='padding:4px 8px;'>신뢰도 {lgbm.get('confidence', 0)}%</td></tr>"
-        )
-        lstm = pred.get("lstm", {})
-        if lstm and "error" not in lstm:
-            ml_rows += (
-                f"<tr><td style='padding:4px 8px; font-weight:bold;'>LSTM</td>"
-                f"<td style='padding:4px 8px;'>{lstm.get('direction', 'N/A')}</td>"
-                f"<td style='padding:4px 8px;'>신뢰도 {lstm.get('confidence', 0)}%</td></tr>"
-            )
-        else:
-            ml_rows += (
-                "<tr><td style='padding:4px 8px; font-weight:bold;'>LSTM</td>"
-                "<td style='padding:4px 8px;' colspan='2'>예측 불가</td></tr>"
-            )
-
-        transformer = pred.get("transformer", {})
-        if transformer and "error" not in transformer:
-            ml_rows += (
-                f"<tr><td style='padding:4px 8px; font-weight:bold; color:#0066cc;'>Transformer (Advanced)</td>"
-                f"<td style='padding:4px 8px;'>{transformer.get('direction', 'N/A')}</td>"
-                f"<td style='padding:4px 8px;'>신뢰도 {transformer.get('confidence', 0)}%</td></tr>"
-            )
-        else:
-            ml_rows += (
-                "<tr><td style='padding:4px 8px; font-weight:bold; color:#0066cc;'>Transformer (Advanced)</td>"
-                "<td style='padding:4px 8px;' colspan='2'>예측 불가</td></tr>"
-            )
-            
-        ml_html = (
-            "<table style='width:100%; border-collapse:collapse; font-size:0.9em; margin:8px 0;'>"
-            "<tr style='background:#f0f0f0;'><th style='padding:4px 8px; text-align:left;'>모델</th>"
-            "<th style='padding:4px 8px; text-align:left;'>예측</th>"
-            "<th style='padding:4px 8px; text-align:left;'>비고</th></tr>"
-            f"{ml_rows}</table>"
-        )
-
-        # 관련 뉴스
-        news_html = ""
-        news_items = item.get("news", [])
-        if news_items:
-            news_li = ""
-            for n in news_items:
-                title = n.get("title", "")
-                link = n.get("link", "")
-                publisher = n.get("publisher", "")
-                safe_title = html.escape(title)
-                safe_summary = html.escape(n.get("summary", ""))
-                safe_publisher = html.escape(publisher)
-                pub_tag = f' <span style="color:#999;">— {safe_publisher}</span>' if safe_publisher else ""
-                summary_html = f'<br><span style="color:#555;font-size:0.85em;">{safe_summary}</span>' if safe_summary else ""
-                # javascript: URL 방지
-                safe_link = link if link.startswith(("http://", "https://")) else ""
-                if safe_link:
-                    news_li += f'<li style="margin:6px 0;"><a href="{safe_link}" target="_blank" style="color:#0066cc;">{safe_title}</a>{pub_tag}{summary_html}</li>'
-                else:
-                    news_li += f'<li style="margin:6px 0;">{safe_title}{pub_tag}{summary_html}</li>'
-            news_html = f'<h4 style="margin:12px 0 4px;">관련 뉴스</h4><ul style="font-size:0.9em; padding-left:20px;">{news_li}</ul>'
-
-        sentiment = item.get("sentiment", {})
-        sentiment_html = ""
-        if sentiment:
-            if "error" in sentiment:
-                sentiment_html = f'<p style="font-size:0.9em; color:#dc3545;">[감성 분석 오류] {sentiment["error"]}</p>'
-            else:
-                sent_label = sentiment.get("label", "N/A")
-                sent_score = sentiment.get("score", 0.0)
-                sent_color = "#2ca02c" if "긍정" in sent_label else ("#dc3545" if "부정" in sent_label else "#666")
-                sentiment_html = (
-                    f'<div style="margin-top:10px; padding:10px; background:#f5f7fa; border-radius:6px; border-left:4px solid {sent_color};">'
-                    f'<h4 style="margin:0 0 4px; color:#333;">뉴스 감성 분석 (FinBERT)</h4>'
-                    f'<p style="margin:0; font-size:0.95em;">종합 의견: <strong style="color:{sent_color};">{sent_label}</strong> '
-                    f'<span style="color:#666; font-size:0.9em;">(점수: {sent_score:+.3f})</span></p>'
-                    f'</div>'
-                )
-
-        rows.append(f"""
-        <div style="border:1px solid #ddd; border-radius:8px; padding:16px; margin:12px 0;">
-            <h3>{name} ({symbol_esc})</h3>
-            <p>현재가: <b>{sig['close']:,.2f}</b> | RSI: {sig['rsi']}
-               | <span style="color:{_signal_color(sig['signal'])}; font-weight:bold;">
-                 {sig['signal']}</span> (점수: {sig['score']})</p>
-            <p style="font-size:0.9em;">{', '.join(sig['reasons']) if sig['reasons'] else '특이사항 없음'}</p>
-            {sentiment_html}
-            <h4 style="margin:12px 0 4px;">기술 지표 분석</h4>
-            {indicators_html}
-            <h4 style="margin:12px 0 4px;">ML 예측</h4>
-            {ml_html}
-            <img src="data:image/png;base64,{chart_b64}" style="width:100%; max-width:700px;"/>
-            {news_html}
-        </div>""")
-
-    disclaimer = pred.get("disclaimer", "") if analyses else ""
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Stock Report {now}</title></head>
-<body style="font-family:Arial,sans-serif; max-width:800px; margin:auto; padding:20px;">
+    return f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock Report {now}</title>
+<style>{_REPORT_CSS}</style>
+</head>
+<body>
 <h1>주식 시장 분석 리포트</h1>
-<p style="color:#666;">생성: {now}</p>
-{''.join(rows)}
-<p style="color:#999; font-size:0.85em; margin-top:20px;">{disclaimer}</p>
-</body></html>"""
-    return html
+<p class="generated-at">생성: {now}</p>
+{cards}
+<p class="disclaimer">{disclaimer}</p>
+</body>
+</html>"""

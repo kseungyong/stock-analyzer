@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
 .env
+!.env.example
 *.html
 .DS_Store
+.cache/

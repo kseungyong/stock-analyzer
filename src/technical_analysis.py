@@ -34,6 +34,29 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # 거래량 비율: 오늘 거래량 / 20일 평균
     df["Volume_Ratio"] = df["Volume"] / df["Volume_MA20"]
 
+    # Stochastic Oscillator
+    stoch = ta.momentum.StochasticOscillator(df["High"], df["Low"], close)
+    df["Stoch_K"] = stoch.stoch()
+    df["Stoch_D"] = stoch.stoch_signal()
+
+    # ATR (비율로 정규화)
+    atr = ta.volatility.AverageTrueRange(df["High"], df["Low"], close)
+    df["ATR_pct"] = atr.average_true_range() / close
+
+    # OBV 변화율
+    df["OBV_Change"] = ta.volume.on_balance_volume(close, df["Volume"]).pct_change()
+
+    # Williams %R
+    df["Williams_R"] = ta.momentum.WilliamsRIndicator(df["High"], df["Low"], close).williams_r()
+
+    # CCI
+    df["CCI"] = ta.trend.CCIIndicator(df["High"], df["Low"], close).cci()
+
+    # 수익률
+    df["Return_1d"] = close.pct_change(1)
+    df["Return_5d"] = close.pct_change(5)
+    df["Return_20d"] = close.pct_change(20)
+
     return df
 
 

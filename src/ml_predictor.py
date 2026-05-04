@@ -1,18 +1,29 @@
-import pandas as pd
-import numpy as np
+from __future__ import annotations
+
+import os
 import time
-import threading
-from prophet import Prophet
-from sklearn.ensemble import RandomForestClassifier
-from lightgbm import LGBMClassifier
-from sklearn.preprocessing import MinMaxScaler
 import warnings
 import logging
-import os
+import threading
+
+# libomp 다중 로드 충돌 방지 (scikit-learn / LightGBM / PyTorch 각자 번들 충돌)
+# → torch를 가장 먼저 import해서 torch 번들 libomp를 primary로 고정
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+try:
+    import torch as _torch_preload  # noqa: F401 — libomp 선점 목적
+except ImportError:
+    pass
+
+import pandas as pd
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import MinMaxScaler
+import lightgbm as lgb
+from lightgbm import LGBMClassifier
+from prophet import Prophet
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
-# Prophet 로그 억제
 logging.getLogger("prophet").setLevel(logging.WARNING)
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -22,64 +33,104 @@ DISCLAIMER = "⚠️ ML 예측은 참고용이며, 투자 판단의 근거로 �
 _finbert_pipeline = None
 _finbert_lock = threading.Lock()
 
-# 예측 결과 TTL 캐시: {cache_key: (timestamp, result)}
-_prediction_cache: dict[str, tuple[float, dict]] = {}
-_PREDICTION_CACHE_TTL = 3600  # 1시간
+_prediction_cache: dict = {}
+_prediction_cache_lock = threading.Lock()
+_PREDICTION_CACHE_TTL: int = 3600  # 1시간
+
+_CLF_FEATURES = [
+    "MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower",
+    "Volume_Ratio", "Stoch_K", "Stoch_D", "ATR_pct", "OBV_Change",
+    "Williams_R", "CCI", "Return_1d", "Return_5d", "Return_20d",
+]
 
 
-def _get_finbert():
-    """FinBERT 파이프라인을 로드하고 캐싱한다. 최초 호출 시에만 모델을 로드한다 (thread-safe)."""
-    global _finbert_pipeline
-    if _finbert_pipeline is None:
-        with _finbert_lock:
-            if _finbert_pipeline is None:  # double-checked locking
-                from transformers import pipeline
-                _finbert_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
-    return _finbert_pipeline
+# ---------------------------------------------------------------------------
+# TSTransformer — top-level (ProcessPoolExecutor pickle 요건)
+# ---------------------------------------------------------------------------
+
+def _build_transformer_model(feature_dim: int, lookback: int, d_model: int = 32,
+                              nhead: int = 4, num_layers: int = 2, dropout: float = 0.2):
+    """PyTorch Transformer 모델을 생성한다. top-level 함수로 분리하여 pickle 가능하게 한다."""
+    import torch
+    import torch.nn as nn
+
+    class TSTransformer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_linear = nn.Linear(feature_dim, d_model)
+            self.pos_encoder = nn.Parameter(torch.zeros(1, lookback, d_model))
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=nhead, dropout=dropout, batch_first=True
+            )
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+            self.fc = nn.Linear(d_model, 1)
+            self.sigmoid = nn.Sigmoid()
+
+        def forward(self, src):
+            x = self.input_linear(src) + self.pos_encoder
+            x = self.transformer_encoder(x)
+            return self.sigmoid(self.fc(x[:, -1, :]))
+
+    return TSTransformer()
 
 
-def predict_with_prophet(df: pd.DataFrame, days: int = 7) -> pd.DataFrame:
-    """Prophet으로 향후 가격 추세를 예측한다.
+# ---------------------------------------------------------------------------
+# 공통 데이터 준비
+# ---------------------------------------------------------------------------
 
-    Args:
-        df: OHLCV 데이터프레임
-        days: 예측 일수
+def _prepare_clf_data(df: pd.DataFrame) -> tuple | None:
+    data = df.dropna(subset=_CLF_FEATURES).copy()
+    if len(data) < 30:
+        return None
+    data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
+    data = data.dropna()
+    X = data[_CLF_FEATURES].values
+    y = data["Target"].values
+    split = int(len(X) * 0.8)
+    return X[:split], X[split:], y[:split], y[split:], X
 
-    Returns:
-        예측 결과 데이터프레임 (ds, yhat, yhat_lower, yhat_upper)
-    """
+
+def _prepare_sequence_data(df: pd.DataFrame, features: list[str], lookback: int) -> tuple | None:
+    data = df.dropna(subset=features).copy()
+    if len(data) < lookback + 30:
+        return None
+    data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
+    data = data.dropna()
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(data[features].values)
+    X, y = [], []
+    for i in range(lookback, len(scaled)):
+        X.append(scaled[i - lookback:i])
+        y.append(data["Target"].iloc[i])
+    X, y = np.array(X), np.array(y)
+    split = int(len(X) * 0.8)
+    return X[:split], X[split:], y[:split], y[split:], X
+
+
+# ---------------------------------------------------------------------------
+# 모델별 top-level 예측 함수 (ProcessPoolExecutor 직렬화 가능)
+# ---------------------------------------------------------------------------
+
+def predict_prophet(df: pd.DataFrame, days: int = 7) -> dict:
+    """Prophet으로 향후 가격 추세를 예측한다."""
     prophet_df = df[["Close"]].reset_index()
     prophet_df.columns = ["ds", "y"]
     prophet_df["ds"] = pd.to_datetime(prophet_df["ds"])
 
     model = Prophet(daily_seasonality=False, yearly_seasonality=True)
     model.fit(prophet_df)
-
     future = model.make_future_dataframe(periods=days)
     forecast = model.predict(future)
+    tail = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(days)
 
-    return forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(days)
-
-
-_CLF_FEATURES = ["MA5", "MA20", "RSI", "MACD", "MACD_Hist", "BB_Upper", "BB_Lower"]
-
-
-def _prepare_clf_data(df: pd.DataFrame) -> tuple | None:
-    """분류 모델 공통 데이터 준비 — 피처 행렬, 타겟, train/test 분할을 반환한다.
-
-    Returns:
-        (X_train, X_test, y_train, y_test, X_all) 또는 데이터 부족 시 None
-    """
-    data = df.dropna(subset=_CLF_FEATURES).copy()
-    if len(data) < 30:
-        return None
-    data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
-    data = data.dropna()
-
-    X = data[_CLF_FEATURES].values
-    y = data["Target"].values
-    split = int(len(X) * 0.8)
-    return X[:split], X[split:], y[:split], y[split:], X
+    last_close = df["Close"].iloc[-1]
+    predicted = tail["yhat"].iloc[-1]
+    change_pct = (predicted - last_close) / last_close * 100
+    return {
+        "predicted_price": round(predicted, 2),
+        "change_pct": round(change_pct, 2),
+        "range": [round(tail["yhat_lower"].iloc[-1], 2), round(tail["yhat_upper"].iloc[-1], 2)],
+    }
 
 
 def predict_direction(df: pd.DataFrame) -> dict:
@@ -88,11 +139,9 @@ def predict_direction(df: pd.DataFrame) -> dict:
     if prepared is None:
         return {"direction": "데이터 부족", "confidence": 0.0}
     X_train, X_test, y_train, y_test, X = prepared
-
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
     clf.fit(X_train, y_train)
     accuracy = clf.score(X_test, y_test) if len(X_test) > 0 else 0.0
-
     proba = clf.predict_proba(X[-1].reshape(1, -1))[0]
     pred = clf.predict(X[-1].reshape(1, -1))[0]
     return {
@@ -108,11 +157,17 @@ def predict_direction_lgbm(df: pd.DataFrame) -> dict:
     if prepared is None:
         return {"direction": "데이터 부족", "confidence": 0.0}
     X_train, X_test, y_train, y_test, X = prepared
-
-    clf = LGBMClassifier(n_estimators=100, random_state=42, verbose=-1)
-    clf.fit(X_train, y_train)
+    clf = LGBMClassifier(
+        n_estimators=300, num_leaves=31, learning_rate=0.05,
+        min_child_samples=20, random_state=42, verbose=-1,
+    )
+    callbacks = []
+    eval_set = None
+    if len(X_test) > 0:
+        eval_set = [(X_test, y_test)]
+        callbacks = [lgb.early_stopping(30, verbose=False), lgb.log_evaluation(period=-1)]
+    clf.fit(X_train, y_train, eval_set=eval_set, callbacks=callbacks)
     accuracy = clf.score(X_test, y_test) if len(X_test) > 0 else 0.0
-
     proba = clf.predict_proba(X[-1].reshape(1, -1))[0]
     pred = clf.predict(X[-1].reshape(1, -1))[0]
     return {
@@ -123,57 +178,80 @@ def predict_direction_lgbm(df: pd.DataFrame) -> dict:
 
 
 def predict_direction_lstm(df: pd.DataFrame, lookback: int = 20) -> dict:
-    """LSTM으로 다음 날 상승/하락을 분류한다.
+    """LSTM으로 다음 날 상승/하락을 분류한다 (PyTorch 구현)."""
+    try:
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import TensorDataset, DataLoader
+    except ImportError:
+        return {"direction": "PyTorch 미설치", "confidence": 0.0, "accuracy": 0.0}
 
-    최근 lookback일간의 기술 지표 시퀀스를 입력으로 사용한다.
-    """
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense, Dropout
-    from tensorflow.keras.callbacks import EarlyStopping
-
-    features = _CLF_FEATURES
-    data = df.dropna(subset=features).copy()
-
-    if len(data) < lookback + 30:
+    prepared = _prepare_sequence_data(df, _CLF_FEATURES, lookback)
+    if prepared is None:
         return {"direction": "데이터 부족", "confidence": 0.0}
-
-    data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
-    data = data.dropna()
-
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(data[features].values)
-
-    X, y = [], []
-    for i in range(lookback, len(scaled)):
-        X.append(scaled[i - lookback:i])
-        y.append(data["Target"].iloc[i])
-    X = np.array(X)
-    y = np.array(y)
-
-    split = int(len(X) * 0.8)
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
-
+    X_train, X_test, y_train, y_test, X = prepared
     if len(X_test) == 0:
         return {"direction": "데이터 부족", "confidence": 0.0}
 
-    model = Sequential([
-        LSTM(50, return_sequences=False, input_shape=(lookback, len(features))),
-        Dropout(0.2),
-        Dense(1, activation="sigmoid"),
-    ])
-    model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
-    early_stop = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
-    model.fit(X_train, y_train, epochs=50, batch_size=32,
-              validation_data=(X_test, y_test), callbacks=[early_stop], verbose=0)
+    class LSTMModel(nn.Module):
+        def __init__(self, input_size, hidden_size=50, dropout=0.2):
+            super().__init__()
+            self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+            self.dropout = nn.Dropout(dropout)
+            self.fc = nn.Linear(hidden_size, 1)
+            self.sigmoid = nn.Sigmoid()
 
-    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            out = self.dropout(out[:, -1, :])
+            return self.sigmoid(self.fc(out))
 
-    latest = X[-1].reshape(1, lookback, len(features))
-    prob = float(model.predict(latest, verbose=0)[0][0])
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
+    X_test_t = torch.tensor(X_test, dtype=torch.float32)
+    y_test_t = torch.tensor(y_test, dtype=torch.float32).unsqueeze(1)
+
+    train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=32, shuffle=True)
+
+    device = torch.device("cpu")
+    model = LSTMModel(input_size=len(_CLF_FEATURES)).to(device)
+    criterion = nn.BCELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    best_val_loss = float("inf")
+    patience, no_improve = 3, 0
+    best_state = None
+
+    model.train()
+    for _ in range(20):
+        for bx, by in train_loader:
+            optimizer.zero_grad()
+            loss = criterion(model(bx.to(device)), by.to(device))
+            loss.backward()
+            optimizer.step()
+        with torch.no_grad():
+            val_loss = criterion(model(X_test_t.to(device)), y_test_t.to(device)).item()
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                break
+
+    if best_state:
+        model.load_state_dict(best_state)
+
+    model.eval()
+    with torch.no_grad():
+        preds = model(X_test_t.to(device))
+        preds_bin = (preds >= 0.5).float()
+        accuracy = (preds_bin == y_test_t.to(device)).float().mean().item()
+        prob = model(torch.tensor(X[-1], dtype=torch.float32).unsqueeze(0).to(device)).item()
+
     pred = 1 if prob >= 0.5 else 0
     confidence = prob if pred == 1 else 1 - prob
-
     return {
         "direction": "상승" if pred == 1 else "하락",
         "confidence": round(confidence * 100, 1),
@@ -182,10 +260,7 @@ def predict_direction_lstm(df: pd.DataFrame, lookback: int = 20) -> dict:
 
 
 def predict_direction_transformer(df: pd.DataFrame, lookback: int = 20) -> dict:
-    """Transformer 계열 딥러닝 모델로 다음 날 상승/하락을 분류한다.
-    
-    LSTM보다 장기 의존성(Long-term dependency)을 더 잘 파악할 수 있는 최신 구조.
-    """
+    """Transformer 모델로 다음 날 상승/하락을 분류한다."""
     try:
         import torch
         import torch.nn as nn
@@ -193,95 +268,42 @@ def predict_direction_transformer(df: pd.DataFrame, lookback: int = 20) -> dict:
     except ImportError:
         return {"direction": "PyTorch 미설치", "confidence": 0.0, "accuracy": 0.0}
 
-    features = _CLF_FEATURES
-    data = df.dropna(subset=features).copy()
-
-    if len(data) < lookback + 30:
+    prepared = _prepare_sequence_data(df, _CLF_FEATURES, lookback)
+    if prepared is None:
         return {"direction": "데이터 부족", "confidence": 0.0}
-
-    data["Target"] = (data["Close"].shift(-1) > data["Close"]).astype(int)
-    data = data.dropna()
-
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(data[features].values)
-
-    X, y = [], []
-    for i in range(lookback, len(scaled)):
-        X.append(scaled[i - lookback:i])
-        y.append(data["Target"].iloc[i])
-    X = np.array(X)
-    y = np.array(y)
-
-    split = int(len(X) * 0.8)
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
-
+    X_train, X_test, y_train, y_test, X = prepared
     if len(X_test) == 0:
         return {"direction": "데이터 부족", "confidence": 0.0}
 
-    # PyTorch Tensors
     X_train_t = torch.tensor(X_train, dtype=torch.float32)
     y_train_t = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
     X_test_t = torch.tensor(X_test, dtype=torch.float32)
     y_test_t = torch.tensor(y_test, dtype=torch.float32).unsqueeze(1)
 
-    train_data = TensorDataset(X_train_t, y_train_t)
-    train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
-
-    # 간단한 Time-Series Transformer 모형
-    class TSTransformer(nn.Module):
-        def __init__(self, feature_dim, d_model=32, nhead=4, num_layers=2, dropout=0.2):
-            super().__init__()
-            self.input_linear = nn.Linear(feature_dim, d_model)
-            self.pos_encoder = nn.Parameter(torch.zeros(1, lookback, d_model))
-            encoder_layers = nn.TransformerEncoderLayer(
-                d_model=d_model, nhead=nhead, dropout=dropout, batch_first=True
-            )
-            self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers)
-            self.fc = nn.Linear(d_model, 1)
-            self.sigmoid = nn.Sigmoid()
-
-        def forward(self, src):
-            # src: [batch_size, seq_len, features] -> [batch_size, seq_len, d_model]
-            x = self.input_linear(src)
-            # Add positional encoding
-            x = x + self.pos_encoder
-            # Transformer
-            x = self.transformer_encoder(x)
-            # Use only the last time step for prediction
-            x = x[:, -1, :]
-            out = self.sigmoid(self.fc(x))
-            return out
+    train_loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=32, shuffle=True)
 
     device = torch.device("cpu")
-    model = TSTransformer(feature_dim=len(features)).to(device)
+    model = _build_transformer_model(feature_dim=len(_CLF_FEATURES), lookback=lookback).to(device)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    # 훈련 (10 epochs for speed, as it's run synchronously in web request)
     model.train()
     for _ in range(10):
         for bx, by in train_loader:
             optimizer.zero_grad()
-            out = model(bx.to(device))
-            loss = criterion(out, by.to(device))
+            loss = criterion(model(bx.to(device)), by.to(device))
             loss.backward()
             optimizer.step()
 
-    # 평가 / 예측
     model.eval()
     with torch.no_grad():
-        test_preds = model(X_test_t.to(device))
-        test_preds_bin = (test_preds >= 0.5).float()
-        correct = (test_preds_bin == y_test_t.to(device)).sum().item()
-        accuracy = correct / len(y_test_t)
-
-        latest_x = torch.tensor(X[-1], dtype=torch.float32).unsqueeze(0).to(device)
-        prob = model(latest_x).item()
+        preds = model(X_test_t.to(device))
+        preds_bin = (preds >= 0.5).float()
+        accuracy = (preds_bin == y_test_t.to(device)).float().mean().item()
+        prob = model(torch.tensor(X[-1], dtype=torch.float32).unsqueeze(0).to(device)).item()
 
     pred = 1 if prob >= 0.5 else 0
     confidence = prob if pred == 1 else 1 - prob
-
     return {
         "direction": "상승" if pred == 1 else "하락",
         "confidence": round(confidence * 100, 1),
@@ -289,93 +311,32 @@ def predict_direction_transformer(df: pd.DataFrame, lookback: int = 20) -> dict:
     }
 
 
-def run_prediction(df: pd.DataFrame, cache_key: str = "") -> dict:
-    """Prophet + RF + LightGBM + LSTM + Transformer 예측을 실행하고 결과를 반환한다.
+# ---------------------------------------------------------------------------
+# FinBERT 감성 분석 (별도 — ProcessPoolExecutor 대상 아님)
+# ---------------------------------------------------------------------------
 
-    Args:
-        df: OHLCV + 기술지표 데이터프레임
-        cache_key: 캐시 키 (보통 종목 심볼). 지정 시 TTL 캐시를 사용한다.
-    """
-    if cache_key:
-        cached = _prediction_cache.get(cache_key)
-        if cached and time.time() - cached[0] < _PREDICTION_CACHE_TTL:
-            return cached[1]
-
-    prophet_result = None
-    try:
-        prophet_forecast = predict_with_prophet(df)
-        last_close = df["Close"].iloc[-1]
-        predicted = prophet_forecast["yhat"].iloc[-1]
-        change_pct = (predicted - last_close) / last_close * 100
-        prophet_result = {
-            "predicted_price": round(predicted, 2),
-            "change_pct": round(change_pct, 2),
-            "range": [
-                round(prophet_forecast["yhat_lower"].iloc[-1], 2),
-                round(prophet_forecast["yhat_upper"].iloc[-1], 2),
-            ],
-        }
-    except Exception as e:
-        prophet_result = {"error": str(e)}
-
-    try:
-        rf_result = predict_direction(df)
-    except Exception as e:
-        rf_result = {"error": str(e)}
-
-    try:
-        lgbm_result = predict_direction_lgbm(df)
-    except Exception as e:
-        lgbm_result = {"error": str(e)}
-
-    lstm_result = None
-    try:
-        lstm_result = predict_direction_lstm(df)
-    except Exception as e:
-        lstm_result = {"error": str(e)}
-
-    transformer_result = None
-    try:
-        transformer_result = predict_direction_transformer(df)
-    except Exception as e:
-        transformer_result = {"error": str(e)}
-
-    result = {
-        "prophet": prophet_result,
-        "random_forest": rf_result,
-        "lightgbm": lgbm_result,
-        "lstm": lstm_result,
-        "transformer": transformer_result,
-        "disclaimer": DISCLAIMER,
-    }
-
-    if cache_key:
-        _prediction_cache[cache_key] = (time.time(), result)
-
-    return result
+def _get_finbert():
+    global _finbert_pipeline
+    if _finbert_pipeline is None:
+        with _finbert_lock:
+            if _finbert_pipeline is None:
+                from transformers import pipeline
+                _finbert_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert", framework="pt", device="cpu")
+    return _finbert_pipeline
 
 
 def analyze_sentiment(news_items: list[dict]) -> dict:
-    """FinBERT를 사용하여 뉴스 기사의 감성을 분석한다.
-    
-    Args:
-        news_items: [{"title": ..., "summary": ...}, ...]
-        
-    Returns:
-        {"label": "Bullish/Bearish/Neutral", "score": float, "details": [...]}
-    """
+    """FinBERT를 사용하여 뉴스 기사의 감성을 분석한다."""
     if not news_items:
         return {"label": "뉴스 없음", "score": 0.0, "details": []}
 
-    # 텍스트 수집 — FinBERT 로드 전에 먼저 확인
     texts = []
     for item in news_items:
-        # FinBERT is trained on English — use original English text when available
         title = item.get("title_en") or item.get("title", "")
         summary = item.get("summary_en") or item.get("summary", "")
         text = ". ".join(filter(None, [title, summary]))
         if text:
-            texts.append((item, text[:512]))  # truncate to 512 chars
+            texts.append((item, text[:512]))
 
     if not texts:
         return {"label": "분석할 텍스트 없음", "score": 0.0, "details": []}
@@ -393,30 +354,19 @@ def analyze_sentiment(news_items: list[dict]) -> dict:
 
     try:
         for item, text in texts:
-            # ProsusAI/finbert labels: positive, negative, neutral
             res = sentiment_pipeline(text)[0]
             label = res["label"]
             conf = res["score"]
-            
             if label == "positive":
-                score = conf
-                kor_label = "긍정"
+                score, kor_label = conf, "긍정"
             elif label == "negative":
-                score = -conf
-                kor_label = "부정"
+                score, kor_label = -conf, "부정"
             else:
-                score = 0
-                kor_label = "중립"
-                
+                score, kor_label = 0, "중립"
             total_score += score
             valid_count += 1
-            
-            results.append({
-                "title": item.get("title", ""),
-                "label": kor_label,
-                "confidence": round(conf * 100, 1)
-            })
-            
+            results.append({"title": item.get("title", ""), "label": kor_label,
+                             "confidence": round(conf * 100, 1)})
     except Exception as e:
         return {"error": f"Analysis failed: {e}"}
 
@@ -424,7 +374,6 @@ def analyze_sentiment(news_items: list[dict]) -> dict:
         return {"label": "분석 불가", "score": 0.0, "details": []}
 
     avg_score = total_score / valid_count
-    
     if avg_score > 0.2:
         overall_label = "긍정적 (Bullish)"
     elif avg_score < -0.2:
@@ -432,8 +381,102 @@ def analyze_sentiment(news_items: list[dict]) -> dict:
     else:
         overall_label = "중립적 (Neutral)"
 
+    return {"label": overall_label, "score": round(avg_score, 3), "details": results}
+
+
+# ---------------------------------------------------------------------------
+# 앙상블 예측
+# ---------------------------------------------------------------------------
+
+def predict_ensemble(results: dict) -> dict:
+    """4개 분류 모델(random_forest, lightgbm, lstm, transformer)의 가중 투표 앙상블."""
+    model_keys = ["random_forest", "lightgbm", "lstm", "transformer"]
+    up_weight = 0.0
+    down_weight = 0.0
+    total_weight = 0.0
+    model_count = 0
+
+    for key in model_keys:
+        res = results.get(key)
+        if res is None or "error" in res:
+            continue
+        direction = res.get("direction", "")
+        confidence = res.get("confidence", 0.0)
+        accuracy = res.get("accuracy", 0.0)
+        if direction not in ("상승", "하락"):
+            continue
+        weight = (confidence / 100) * (accuracy / 100)
+        total_weight += weight
+        if direction == "상승":
+            up_weight += weight
+        else:
+            down_weight += weight
+        model_count += 1
+
+    if model_count == 0 or total_weight == 0:
+        return {"direction": "데이터 부족", "confidence": 0.0, "vote_ratio": 0.0, "model_count": 0}
+
+    if up_weight >= down_weight:
+        direction = "상승"
+        vote_ratio = up_weight / total_weight
+    else:
+        direction = "하락"
+        vote_ratio = down_weight / total_weight
+
+    confidence = round(vote_ratio * 100, 1)
     return {
-        "label": overall_label,
-        "score": round(avg_score, 3),
-        "details": results
+        "direction": direction,
+        "confidence": confidence,
+        "vote_ratio": round(vote_ratio, 3),
+        "model_count": model_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# 하위 호환 래퍼 — prediction_engine 미사용 환경 대응
+# ---------------------------------------------------------------------------
+
+def run_prediction(df: pd.DataFrame, cache_key: str = "") -> dict:
+    """ThreadPoolExecutor 기반 병렬 예측 (하위 호환용).
+
+    PredictionEngine을 사용할 수 없는 환경에서 폴백으로 사용한다.
+    """
+    if cache_key:
+        with _prediction_cache_lock:
+            if cache_key in _prediction_cache:
+                ts, cached = _prediction_cache[cache_key]
+                if time.time() - ts < _PREDICTION_CACHE_TTL:
+                    return cached
+
+    tasks = {
+        "prophet": lambda: predict_prophet(df),
+        "random_forest": lambda: predict_direction(df),
+        "lightgbm": lambda: predict_direction_lgbm(df),
+        "lstm": lambda: predict_direction_lstm(df),
+        "transformer": lambda: predict_direction_transformer(df),
+    }
+    results: dict = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_name = {executor.submit(fn): name for name, fn in tasks.items()}
+        for future in as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                results[name] = future.result()
+            except Exception as e:
+                results[name] = {"error": str(e)}
+
+    output = {
+        "prophet": results.get("prophet"),
+        "random_forest": results.get("random_forest"),
+        "lightgbm": results.get("lightgbm"),
+        "lstm": results.get("lstm"),
+        "transformer": results.get("transformer"),
+        "ensemble": predict_ensemble(results),
+        "disclaimer": DISCLAIMER,
+    }
+
+    if cache_key:
+        with _prediction_cache_lock:
+            _prediction_cache[cache_key] = (time.time(), output)
+
+    return output

@@ -14,4 +14,7 @@ python-dotenv>=1.0.0
 torch>=2.0.0
 transformers>=4.35.0
 pytz>=2023.3
+gunicorn>=21.0.0
 pytest>=8.0.0
+finance-datareader>=0.9.60
+pykrx>=1.0.45

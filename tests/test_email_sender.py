@@ -1,0 +1,96 @@
+"""src/email_sender.py 단위 테스트."""
+from __future__ import annotations
+
+import smtplib
+import sys
+import types
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# python-dotenv 미설치 환경 대응
+_dotenv_mock = types.ModuleType("dotenv")
+_dotenv_mock.load_dotenv = lambda *a, **kw: None
+sys.modules.setdefault("dotenv", _dotenv_mock)
+
+from src.email_sender import send_report  # noqa: E402
+
+_BASE_CONFIG = {
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "sender": "sender@example.com",
+    "password": "secret",
+    "recipients": ["recipient@example.com"],
+}
+
+
+class TestSendReport:
+    def test_skips_when_no_credentials(self):
+        config = {**_BASE_CONFIG, "sender": "", "password": ""}
+        with patch("src.email_sender.os.getenv", return_value=""):
+            # 예외 없이 종료되어야 함
+            send_report("<html/>", config)
+
+    def test_sends_email_successfully(self):
+        mock_server = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_server)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        with patch("src.email_sender.smtplib.SMTP", return_value=mock_ctx):
+            with patch.dict("os.environ", {}, clear=False):
+                send_report("<html>리포트</html>", _BASE_CONFIG)
+
+        mock_server.starttls.assert_called_once()
+        mock_server.login.assert_called_once_with(
+            _BASE_CONFIG["sender"], _BASE_CONFIG["password"]
+        )
+        mock_server.sendmail.assert_called_once()
+
+    def test_env_credentials_override_config(self):
+        mock_server = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(return_value=mock_server)
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        env_sender = "env_sender@example.com"
+        env_password = "env_password"
+
+        with patch("src.email_sender.smtplib.SMTP", return_value=mock_ctx):
+            with patch("src.email_sender.os.getenv", side_effect=lambda k, d="": {
+                "EMAIL_SENDER": env_sender,
+                "EMAIL_PASSWORD": env_password,
+            }.get(k, d)):
+                send_report("<html/>", _BASE_CONFIG)
+
+        mock_server.login.assert_called_once_with(env_sender, env_password)
+
+    def test_auth_error_logged(self, caplog):
+        import logging
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(side_effect=smtplib.SMTPAuthenticationError(535, b"auth"))
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        with patch("src.email_sender.smtplib.SMTP", return_value=mock_ctx):
+            with caplog.at_level(logging.ERROR, logger="src.email_sender"):
+                send_report("<html/>", _BASE_CONFIG)
+        assert any("인증 실패" in r.message for r in caplog.records)
+
+    def test_connect_error_logged(self, caplog):
+        import logging
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(side_effect=smtplib.SMTPConnectError(421, b"connect"))
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        with patch("src.email_sender.smtplib.SMTP", return_value=mock_ctx):
+            with caplog.at_level(logging.ERROR, logger="src.email_sender"):
+                send_report("<html/>", _BASE_CONFIG)
+        assert any("연결 실패" in r.message for r in caplog.records)
+
+    def test_os_error_logged(self, caplog):
+        import logging
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(side_effect=OSError("network"))
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        with patch("src.email_sender.smtplib.SMTP", return_value=mock_ctx):
+            with caplog.at_level(logging.ERROR, logger="src.email_sender"):
+                send_report("<html/>", _BASE_CONFIG)
+        assert any("네트워크" in r.message for r in caplog.records)

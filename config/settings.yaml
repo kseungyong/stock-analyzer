@@ -17,6 +17,14 @@ stocks:
     symbol: 000660.KS
   - name: 현대자동차
     symbol: 005380.KS
+  - name: 현대로템
+    symbol: 064350.KS
+  - name: 삼성sdi
+    symbol: 006400.KS
+  - name: 대우건설
+    symbol: 047040.KS
+  - name: 대우
+    symbol: 004.KS
   us:
   - name: Apple
     symbol: AAPL
@@ -28,3 +36,11 @@ stocks:
     symbol: IONQ
   - name: 마이크로소프트
     symbol: MSFT
+  - name: ProShare Ultra QQQ
+    symbol: QLD
+  - name: Direxion Daily Technology Bull 3X Shares
+    symbol: TECL
+  - name: Proshares Ultra Semiconductor
+    symbol: USD
+  - name: 삼성
+    symbol: SAM
