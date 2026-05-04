@@ -8,6 +8,8 @@ import time
 from contextlib import closing
 from pathlib import Path
 
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).resolve().parent.parent / "data" / "predictions.db"
@@ -109,3 +111,65 @@ def insert_live(
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
+
+
+def _df_to_target_close_map(df: pd.DataFrame) -> dict[int, float]:
+    """df의 (KST 자정 UTC unix epoch → close) 매핑.
+
+    yfinance/FDR이 반환한 거래일 인덱스를 KST 자정 기준으로 정규화한다.
+    """
+    if df.empty:
+        return {}
+    idx = df.index
+    if idx.tz is None:
+        idx = idx.tz_localize("Asia/Seoul", nonexistent="shift_forward", ambiguous="raise")
+    else:
+        idx = idx.tz_convert("Asia/Seoul")
+    idx = idx.normalize()
+    epochs = idx.tz_convert("UTC").astype("int64") // 10**9
+    return dict(zip(epochs.tolist(), df["Close"].astype(float).tolist()))
+
+
+def _compute_hit(direction: str, base_close: float, actual_close: float) -> int:
+    """방향 예측 vs 실제 종가 비교. 변동 없음은 보수적으로 0(miss)."""
+    if direction == "상승":
+        return 1 if actual_close > base_close else 0
+    if direction == "하락":
+        return 1 if actual_close < base_close else 0
+    return 0
+
+
+def backfill_inline(symbol: str, df: pd.DataFrame) -> int:
+    """인라인 백필: df에 있는 날짜의 미평가 예측 actual_close 채움.
+
+    Returns: 평가된 행 수.
+    """
+    target_close_map = _df_to_target_close_map(df)
+    if not target_close_map:
+        return 0
+
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            cur = conn.execute(
+                """SELECT id, target_date, direction, base_close
+                   FROM predictions
+                   WHERE symbol = ? AND actual_close IS NULL""",
+                (symbol,),
+            )
+            updates = []
+            now_unix = int(time.time())
+            for row_id, target_date, direction, base_close in cur.fetchall():
+                actual_close = target_close_map.get(target_date)
+                if actual_close is None:
+                    continue
+                hit = _compute_hit(direction, base_close, actual_close)
+                updates.append((actual_close, hit, now_unix, row_id))
+
+            if updates:
+                conn.executemany(
+                    """UPDATE predictions
+                       SET actual_close = ?, hit = ?, evaluated_at = ?
+                       WHERE id = ?""",
+                    updates,
+                )
+            return len(updates)

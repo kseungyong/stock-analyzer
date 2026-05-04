@@ -149,3 +149,115 @@ class TestInsertLive:
             ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] == "상승"  # 첫 예측 보존
+
+
+import pandas as pd
+
+
+class TestBackfillInline:
+    def _sample_df(self):
+        """KST 거래일 인덱스의 df. backfill_inline의 df.index 매칭에 사용."""
+        idx = pd.DatetimeIndex([
+            "2026-04-30",  # 예측 기준일
+            "2026-05-01",  # target_date — 상승 (51000 > 50000)
+            "2026-05-02",  # target_date — 하락 (49000 < 50000)
+        ])
+        return pd.DataFrame({"Close": [50000.0, 51000.0, 49000.0]}, index=idx)
+
+    def _target_date_unix(self, date_str: str) -> int:
+        """YYYY-MM-DD → KST 자정 → UTC unix epoch."""
+        ts = pd.Timestamp(date_str, tz="Asia/Seoul").normalize()
+        return int(ts.tz_convert("UTC").timestamp())
+
+    def test_evaluates_correct_up(self, tmp_db):
+        ph.init_db()
+        ph.insert_live(
+            "AAPL",
+            {"random_forest": {"direction": "상승", "confidence": 65.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-05-01"),
+        )
+        evaluated = ph.backfill_inline("AAPL", self._sample_df())
+        assert evaluated == 1
+        with sqlite3.connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT hit, actual_close FROM predictions WHERE symbol='AAPL'"
+            ).fetchone()
+        assert row[0] == 1
+        assert row[1] == 51000.0
+
+    def test_evaluates_correct_down(self, tmp_db):
+        ph.init_db()
+        ph.insert_live(
+            "AAPL",
+            {"lightgbm": {"direction": "하락", "confidence": 60.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-05-02"),
+        )
+        ph.backfill_inline("AAPL", self._sample_df())
+        with sqlite3.connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT hit FROM predictions WHERE symbol='AAPL'"
+            ).fetchone()
+        assert row[0] == 1
+
+    def test_evaluates_wrong_direction(self, tmp_db):
+        ph.init_db()
+        ph.insert_live(
+            "AAPL",
+            {"random_forest": {"direction": "하락", "confidence": 55.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-05-01"),
+        )
+        ph.backfill_inline("AAPL", self._sample_df())
+        with sqlite3.connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT hit FROM predictions WHERE symbol='AAPL'"
+            ).fetchone()
+        assert row[0] == 0
+
+    def test_skips_unevaluatable(self, tmp_db):
+        """target_date가 df 인덱스에 없으면 평가 불가 → 그대로 둠."""
+        ph.init_db()
+        ph.insert_live(
+            "AAPL",
+            {"random_forest": {"direction": "상승", "confidence": 65.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-12-31"),
+        )
+        evaluated = ph.backfill_inline("AAPL", self._sample_df())
+        assert evaluated == 0
+        with sqlite3.connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT hit, actual_close FROM predictions WHERE symbol='AAPL'"
+            ).fetchone()
+        assert row[0] is None
+        assert row[1] is None
+
+    def test_already_evaluated_skipped(self, tmp_db):
+        ph.init_db()
+        ph.insert_live(
+            "AAPL",
+            {"random_forest": {"direction": "상승", "confidence": 65.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-05-01"),
+        )
+        ph.backfill_inline("AAPL", self._sample_df())
+        evaluated = ph.backfill_inline("AAPL", self._sample_df())
+        assert evaluated == 0
+
+    def test_other_symbol_not_touched(self, tmp_db):
+        ph.init_db()
+        ph.insert_live(
+            "MSFT",
+            {"random_forest": {"direction": "상승", "confidence": 65.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-05-01"),
+        )
+        evaluated = ph.backfill_inline("AAPL", self._sample_df())
+        assert evaluated == 0
+        with sqlite3.connect(tmp_db) as conn:
+            row = conn.execute(
+                "SELECT hit FROM predictions WHERE symbol='MSFT'"
+            ).fetchone()
+        assert row[0] is None
