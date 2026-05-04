@@ -70,3 +70,15 @@ class TestKoreaSearch:
         search_stocks("삼성")
         search_stocks("카카오")
         assert fetch_mock.call_count == 1
+
+    @patch("src.stock_search._fetch_krx_listing")
+    @patch("src.stock_search._search_us", return_value=[])
+    def test_kr_dedup_by_symbol(self, _us, fetch_mock):
+        # 동일 Code/Market을 두 번 포함 — dedup 후 한 번만 등장해야 함
+        fetch_mock.return_value = pd.DataFrame([
+            {"Code": "005930", "Name": "삼성전자", "Market": "KOSPI"},
+            {"Code": "005930", "Name": "삼성전자", "Market": "KOSPI"},
+        ])
+        results = search_stocks("삼성")
+        samsung = [r for r in results if r["symbol"] == "005930.KS"]
+        assert len(samsung) == 1

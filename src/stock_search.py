@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
 
 import pandas as pd
 
@@ -33,12 +32,12 @@ def _load_krx_cache() -> list[dict]:
     now = time.time()
     loaded_at = _krx_cache["loaded_at"]
     if loaded_at is not None and (now - loaded_at) < _KRX_TTL_SECONDS:
-        return _krx_cache["data"]
+        return list(_krx_cache["data"])
 
     with _krx_lock:
         loaded_at = _krx_cache["loaded_at"]
         if loaded_at is not None and (now - loaded_at) < _KRX_TTL_SECONDS:
-            return _krx_cache["data"]
+            return list(_krx_cache["data"])
         try:
             df = _fetch_krx_listing()
             data = []
@@ -53,7 +52,7 @@ def _load_krx_cache() -> list[dict]:
             _krx_cache["data"] = data
             _krx_cache["loaded_at"] = now
             logger.info("KRX 캐시 로드 완료: %d 종목", len(data))
-            return data
+            return list(data)
         except Exception as e:
             logger.warning("KRX 캐시 로드 실패: %s", e)
             return []
@@ -70,7 +69,7 @@ def _search_kr(query: str, limit: int) -> list[dict]:
         name = item["name"]
         symbol = item["symbol"]
         code = symbol.split(".")[0]
-        if q_lower in name.lower() or code.startswith(query):
+        if q_lower in name.lower() or code.upper().startswith(query.upper()):
             results.append(item)
             if len(results) >= limit:
                 break
@@ -85,9 +84,13 @@ def _search_us(query: str, limit: int) -> list[dict]:
 def search_stocks(query: str, limit: int = 10) -> list[dict]:
     """회사명 또는 심볼로 한국·미국 종목을 검색한다.
 
+    Args:
+        query: 검색어 (한글/영문/숫자, 2자 이상)
+        limit: 반환할 최대 결과 수
+
     Returns:
         [{"symbol": str, "name": str, "market": "korea"|"us"}, ...].
-        한국 결과 우선.
+        한국 결과 우선, 심볼 기준 중복 제거.
     """
     q = query.strip() if query else ""
     if len(q) < _MIN_QUERY_LEN:
