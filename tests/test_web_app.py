@@ -21,15 +21,25 @@ def config_file(tmp_path):
     return cfg
 
 
+_CSRF_TOKEN = "test-csrf-token"
+
+
 @pytest.fixture
 def client(config_file, monkeypatch):
-    """Flask 테스트 클라이언트 — CONFIG_PATH를 임시 파일로 교체."""
+    """Flask 테스트 클라이언트 — CONFIG_PATH를 임시 파일로 교체하고 CSRF 토큰을 주입한다."""
     import src.web_app as wa
     monkeypatch.setattr(wa, "CONFIG_PATH", config_file)
     wa.app.config["TESTING"] = True
     wa._jobs.clear()
     with wa.app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess["csrf_token"] = _CSRF_TOKEN
         yield c
+
+
+def _post(client, path, data: dict):
+    """CSRF 토큰을 포함한 POST 요청 헬퍼."""
+    return client.post(path, data={**data, "csrf_token": _CSRF_TOKEN})
 
 
 class TestIndex:
@@ -48,40 +58,54 @@ class TestIndex:
 
 class TestStocksAdd:
     def test_add_valid_us_symbol(self, client, config_file):
-        resp = client.post("/stocks/add", data={"symbol": "TSLA", "name": "Tesla", "market": "us"})
+        resp = _post(client, "/stocks/add", {"symbol": "TSLA", "name": "Tesla", "market": "us"})
         assert resp.status_code == 303
         config = yaml.safe_load(config_file.read_text())
         symbols = [s["symbol"] for s in config["stocks"]["us"]]
         assert "TSLA" in symbols
 
     def test_add_duplicate_redirects_with_error(self, client):
-        resp = client.post("/stocks/add", data={"symbol": "AAPL", "name": "Apple", "market": "us"})
+        resp = _post(client, "/stocks/add", {"symbol": "AAPL", "name": "Apple", "market": "us"})
         assert resp.status_code == 303
         assert b"error=" in resp.headers["Location"].encode()
 
     def test_add_invalid_symbol_redirects_with_error(self, client):
-        resp = client.post("/stocks/add", data={"symbol": "<script>", "name": "hack", "market": "us"})
+        resp = _post(client, "/stocks/add", {"symbol": "<script>", "name": "hack", "market": "us"})
         assert resp.status_code == 303
         assert b"error=" in resp.headers["Location"].encode()
 
     def test_add_empty_symbol_redirects_with_error(self, client):
-        resp = client.post("/stocks/add", data={"symbol": "", "name": "NoName", "market": "us"})
+        resp = _post(client, "/stocks/add", {"symbol": "", "name": "NoName", "market": "us"})
         assert resp.status_code == 303
 
     def test_korea_symbol_appends_ks(self, client, config_file):
-        client.post("/stocks/add", data={"symbol": "005930", "name": "삼성전자", "market": "korea"})
+        _post(client, "/stocks/add", {"symbol": "005930", "name": "삼성전자", "market": "korea"})
         config = yaml.safe_load(config_file.read_text())
         symbols = [s["symbol"] for s in config["stocks"].get("korea", [])]
         assert "005930.KS" in symbols
 
+    def test_csrf_missing_returns_403(self, client):
+        resp = client.post("/stocks/add", data={"symbol": "TSLA", "name": "Tesla", "market": "us"})
+        assert resp.status_code == 403
+
 
 class TestStocksDelete:
     def test_delete_existing(self, client, config_file):
-        resp = client.post("/stocks/delete", data={"symbol": "AAPL"})
+        resp = _post(client, "/stocks/delete", {"symbol": "AAPL"})
         assert resp.status_code == 303
         config = yaml.safe_load(config_file.read_text())
         symbols = [s["symbol"] for s in config["stocks"]["us"]]
         assert "AAPL" not in symbols
+
+    def test_csrf_missing_returns_403(self, client):
+        resp = client.post("/stocks/delete", data={"symbol": "AAPL"})
+        assert resp.status_code == 403
+
+
+class TestAnalyzeAll:
+    def test_csrf_missing_returns_403(self, client):
+        resp = client.post("/analyze-all")
+        assert resp.status_code == 403
 
 
 class TestJobs:
