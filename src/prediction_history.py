@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+from contextlib import closing
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,10 +32,17 @@ CREATE TABLE IF NOT EXISTS predictions (
     UNIQUE(symbol, target_date, model, source, backtest_id)
 );
 
+-- 라이브 예측은 backtest_id=NULL이라 위 UNIQUE 제약을 우회 → 별도 partial unique index로 보호
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pred_live_unique
+    ON predictions(symbol, target_date, model)
+    WHERE source = 'live';
+
 CREATE INDEX IF NOT EXISTS idx_pred_symbol_model
     ON predictions(symbol, model, source);
 CREATE INDEX IF NOT EXISTS idx_pred_unevaluated
     ON predictions(symbol, target_date) WHERE actual_close IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pred_backtest_id
+    ON predictions(backtest_id) WHERE backtest_id IS NOT NULL;
 """
 
 
@@ -51,6 +59,6 @@ def init_db() -> None:
     """첫 호출 시 DB 파일과 부모 디렉토리 생성, 스키마 적용. 멱등."""
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _writer_lock:
-        with _connect() as conn:
+        with closing(_connect()) as conn:
             conn.executescript(_SCHEMA)
     logger.info("predictions DB 초기화 완료: %s", _DB_PATH)
