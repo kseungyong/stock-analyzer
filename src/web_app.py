@@ -525,6 +525,124 @@ body {
 }
 """
 
+_AUTOCOMPLETE_JS = """
+<script>
+(() => {
+  const input = document.getElementById('stock-search-input');
+  const list = document.getElementById('autocomplete-list');
+  if (!input || !list) return;
+  const nameInput = document.querySelector('input[name="name"]');
+  const marketSel = document.querySelector('select[name="market"]');
+
+  let timer = null;
+  let activeIdx = -1;
+  let items = [];
+
+  function close() {
+    list.classList.remove('open');
+    list.innerHTML = '';
+    activeIdx = -1;
+    items = [];
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  }
+
+  function pick(idx) {
+    const r = items[idx];
+    if (!r) return;
+    input.value = r.symbol;
+    if (nameInput) nameInput.value = r.name;
+    if (marketSel) marketSel.value = r.market;
+    close();
+  }
+
+  function highlight(idx) {
+    [...list.querySelectorAll('.autocomplete-item')].forEach((el, i) => {
+      el.classList.toggle('active', i === idx);
+    });
+    if (idx >= 0) {
+      input.setAttribute('aria-activedescendant', 'autocomplete-item-' + idx);
+    } else {
+      input.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function render(results) {
+    list.innerHTML = '';
+    if (results.length === 0) {
+      const div = document.createElement('div');
+      div.className = 'autocomplete-empty';
+      div.textContent = '검색 결과 없음';
+      list.appendChild(div);
+    } else {
+      results.forEach((r, i) => {
+        const it = document.createElement('div');
+        it.className = 'autocomplete-item';
+        it.id = 'autocomplete-item-' + i;
+        it.setAttribute('role', 'option');
+        const left = document.createElement('div');
+        const name = document.createElement('span');
+        name.className = 'ac-name';
+        name.textContent = r.name;
+        const sym = document.createElement('span');
+        sym.className = 'ac-symbol';
+        sym.textContent = r.symbol;
+        left.appendChild(name);
+        left.appendChild(sym);
+        const badge = document.createElement('span');
+        badge.className = 'badge ' + (r.market === 'korea' ? 'badge-korea' : 'badge-us');
+        badge.textContent = r.market === 'korea' ? '한국' : '미국';
+        it.appendChild(left);
+        it.appendChild(badge);
+        it.addEventListener('mousedown', (e) => { e.preventDefault(); pick(i); });
+        list.appendChild(it);
+      });
+    }
+    list.classList.add('open');
+    input.setAttribute('aria-expanded', 'true');
+    items = results;
+    activeIdx = -1;
+  }
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { close(); return; }
+    timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/stocks/search?q=' + encodeURIComponent(q));
+        if (!res.ok) { close(); return; }
+        const data = await res.json();
+        render(Array.isArray(data) ? data : []);
+      } catch { close(); }
+    }, 300);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (!list.classList.contains('open') || items.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIdx = (activeIdx + 1) % items.length;
+      highlight(activeIdx);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIdx = (activeIdx - 1 + items.length) % items.length;
+      highlight(activeIdx);
+    } else if (e.key === 'Enter' && activeIdx >= 0) {
+      e.preventDefault();
+      pick(activeIdx);
+    } else if (e.key === 'Escape') {
+      close();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target) && !list.contains(e.target)) close();
+  });
+})();
+</script>
+"""
+
 # SVG 아이콘 상수
 _ICON_CHART = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>'
 _ICON_PLUS  = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
@@ -694,8 +812,8 @@ def index():
     </div>
     {stock_section}"""
 
-    refresh = "<script>setTimeout(()=>location.reload(),5000);</script>" if running else ""
-    return _page("대시보드", body, refresh)
+    refresh_script = "<script>setTimeout(()=>location.reload(),5000);</script>" if running else ""
+    return _page("대시보드", body, refresh_script + _AUTOCOMPLETE_JS)
 
 
 @app.route("/analyze/<path:symbol>")
