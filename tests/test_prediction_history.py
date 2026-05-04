@@ -261,3 +261,58 @@ class TestBackfillInline:
                 "SELECT hit FROM predictions WHERE symbol='MSFT'"
             ).fetchone()
         assert row[0] is None
+
+    def test_atomic_rollback_on_error(self, tmp_db, monkeypatch):
+        """executemany 도중 에러 발생 시 모든 업데이트 롤백되어야 함."""
+        ph.init_db()
+        # 두 개의 미평가 예측 삽입
+        ph.insert_live(
+            "AAPL",
+            {"random_forest": {"direction": "상승", "confidence": 65.0},
+             "lightgbm": {"direction": "상승", "confidence": 70.0}},
+            base_close=50000.0,
+            target_date=self._target_date_unix("2026-05-01"),
+        )
+
+        # sqlite3.Connection은 C 확장 타입이라 직접 패치 불가.
+        # _connect()를 래핑해 executemany를 가로채는 프록시 연결을 반환.
+        real_connect = ph._connect
+
+        class _FailingConn:
+            """실제 연결을 위임하되 UPDATE executemany는 예외를 던짐."""
+            def __init__(self, inner):
+                self._inner = inner
+
+            def execute(self, sql, params=()):
+                return self._inner.execute(sql, params)
+
+            def executemany(self, sql, rows):
+                if "UPDATE predictions" in sql:
+                    raise RuntimeError("simulated mid-batch failure")
+                return self._inner.executemany(sql, rows)
+
+            def close(self):
+                self._inner.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        def patched_connect():
+            return _FailingConn(real_connect())
+
+        monkeypatch.setattr(ph, "_connect", patched_connect)
+
+        with pytest.raises(RuntimeError):
+            ph.backfill_inline("AAPL", self._sample_df())
+
+        # 롤백되어 actual_close는 여전히 NULL이어야 함
+        with sqlite3.connect(tmp_db) as conn:
+            rows = conn.execute(
+                "SELECT actual_close, hit FROM predictions WHERE symbol='AAPL'"
+            ).fetchall()
+        for row in rows:
+            assert row[0] is None  # actual_close
+            assert row[1] is None  # hit

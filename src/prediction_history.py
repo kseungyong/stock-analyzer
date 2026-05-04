@@ -104,13 +104,19 @@ def insert_live(
 
     with _writer_lock:
         with closing(_connect()) as conn:
-            conn.executemany(
-                """INSERT OR IGNORE INTO predictions
-                   (symbol, ts, target_date, model, direction, confidence,
-                    base_close, source, backtest_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                rows,
-            )
+            conn.execute("BEGIN")
+            try:
+                conn.executemany(
+                    """INSERT OR IGNORE INTO predictions
+                       (symbol, ts, target_date, model, direction, confidence,
+                        base_close, source, backtest_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    rows,
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
 
 
 def _df_to_target_close_map(df: pd.DataFrame) -> dict[int, float]:
@@ -166,10 +172,16 @@ def backfill_inline(symbol: str, df: pd.DataFrame) -> int:
                 updates.append((actual_close, hit, now_unix, row_id))
 
             if updates:
-                conn.executemany(
-                    """UPDATE predictions
-                       SET actual_close = ?, hit = ?, evaluated_at = ?
-                       WHERE id = ?""",
-                    updates,
-                )
+                conn.execute("BEGIN")
+                try:
+                    conn.executemany(
+                        """UPDATE predictions
+                           SET actual_close = ?, hit = ?, evaluated_at = ?
+                           WHERE id = ?""",
+                        updates,
+                    )
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
             return len(updates)
