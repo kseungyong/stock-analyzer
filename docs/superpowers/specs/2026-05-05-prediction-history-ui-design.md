@@ -22,6 +22,7 @@
 | 평가 대기 row | 회색 처리 + "평가 대기" 뱃지 (숨기지 않음) |
 | 종합 hit 판정 | **ensemble 모델의 hit** 를 종합 결과로 사용 |
 | 요약 카드 | 모델 5개의 누적 hit rate (펼친 상태로 항상 노출) |
+| 모델 설명 탭바 | 요약 카드 아래, **CSS-only** radio+label 패턴 (JS 없음). 5개 탭 클릭 시 그 모델의 설명 박스만 전환 |
 | 히스토리 표 | `<details>` 로 접힌 상태 (사용자가 클릭하면 펼침) |
 | 데이터 소스 | `predictions` 테이블, `source = 'live'` row 만 (backtest row 격리) |
 
@@ -35,8 +36,9 @@
       └─ _render_prediction_history(symbol)  ── 신규
             ├─ prediction_history.hit_rate_by_model(symbol, source="live")  ── 기존
             ├─ prediction_history.list_history(symbol, days=90)             ── 신규
-            ├─ _render_hit_rate_summary(rates) ── 신규: 모델 5 카드 그리드
-            └─ _render_history_table(rows)     ── 신규: 시간순 표 (<details> 안)
+            ├─ _render_hit_rate_summary(rates)  ── 신규: 모델 5 카드 그리드
+            ├─ _render_model_tabs()             ── 신규: 모델 설명 탭바 (CSS-only)
+            └─ _render_history_table(rows)      ── 신규: 시간순 표 (<details> 안)
 
 [src/prediction_history.py]
   └─ list_history(symbol, days) ── 신규
@@ -156,6 +158,7 @@ def _render_prediction_history(symbol: str) -> str:
     if not rates and not rows:
         return ""  # 예측 이력 0건 → 섹션 자체 미표시
     summary = _render_hit_rate_summary(rates)
+    tabs = _render_model_tabs()
     if rows:
         details_inner = _render_history_table(rows)
         details_summary_text = f"최근 90일 예측 히스토리 ({len(rows)}회) — 클릭하여 펼치기"
@@ -169,7 +172,7 @@ def _render_prediction_history(symbol: str) -> str:
         f'</details>'
     )
     header = '<div class="page-header" style="margin-top:32px;"><h2>예측 정확도</h2></div>'
-    return header + summary + details
+    return header + summary + tabs + details
 
 
 def _render_hit_rate_summary(rates: dict) -> str:
@@ -239,6 +242,84 @@ def _pred_cell(m: dict | None) -> str:
     else:
         cls = "miss"
     return f'<td class="pred-cell pred-{cls}">{arrow}{pct}%</td>'
+
+
+# ── 모델 설명 (정적 텍스트) ──────────────────────────────────────────────────
+_MODEL_INFO = {
+    "rf": {
+        "name": "RF (Random Forest)",
+        "desc": (
+            "여러 결정 트리를 무작위 샘플링으로 학습 시키고 다수결로 결정한다. "
+            "비선형 패턴 포착에 강하고 과적합 저항성이 높음. "
+            "<strong>강점</strong>: 안정적이고 해석 가능. "
+            "<strong>약점</strong>: 시간 의존성을 직접 모델링하지 않음."
+        ),
+    },
+    "lgbm": {
+        "name": "LGBM (LightGBM)",
+        "desc": (
+            "그래디언트 부스팅 트리. 약한 학습기를 순차적으로 쌓아 잔차를 줄인다. "
+            "leaf-wise 성장으로 학습 빠르고 메모리 효율적. "
+            "<strong>강점</strong>: 정확도 높고 학습 빠름. "
+            "<strong>약점</strong>: 작은 데이터에 과적합 가능."
+        ),
+    },
+    "lstm": {
+        "name": "LSTM (Long Short-Term Memory)",
+        "desc": (
+            "순환 신경망 변형. 게이트 구조로 시계열의 장기 의존성을 학습. "
+            "긴 추세 포착에 강함. "
+            "<strong>강점</strong>: 시계열 패턴 모델링. "
+            "<strong>약점</strong>: 학습 느리고 데이터를 많이 요구함."
+        ),
+    },
+    "transformer": {
+        "name": "Transformer",
+        "desc": (
+            "어텐션 메커니즘 기반. 시계열 임의 위치 간 관계를 동시에 가중. "
+            "최근 NLP·시계열에서 SOTA. "
+            "<strong>강점</strong>: 긴/복잡한 패턴. "
+            "<strong>약점</strong>: 작은 데이터에서 과적합 위험, 연산량 큼."
+        ),
+    },
+    "ensemble": {
+        "name": "Ensemble (앙상블)",
+        "desc": (
+            "위 4개 모델 (RF, LGBM, LSTM, Transformer) 의 예측을 가중 평균/투표로 결합. "
+            "단일 모델의 약점을 상쇄해 안정성을 높인다. "
+            "<strong>강점</strong>: 평균적으로 가장 신뢰할 만한 신호. "
+            "<strong>약점</strong>: 개별 모델보다 해석이 어려움."
+        ),
+    },
+}
+
+
+def _render_model_tabs() -> str:
+    """CSS-only 모델 설명 탭바. 라디오 버튼 + label 패턴 (JS 없음)."""
+    radios = []
+    labels = []
+    panels = []
+    for i, key in enumerate(("rf", "lgbm", "lstm", "transformer", "ensemble")):
+        info = _MODEL_INFO[key]
+        checked = ' checked' if i == 0 else ''
+        radios.append(
+            f'<input type="radio" name="model-tab" id="mtab-{key}" class="mtab-radio"{checked}>'
+        )
+        labels.append(
+            f'<label for="mtab-{key}" class="mtab-label mtab-label-{key}">{info["name"].split(" (")[0]}</label>'
+        )
+        panels.append(
+            f'<section class="mtab-panel mtab-panel-{key}">'
+            f'<h3>{info["name"]}</h3><p>{info["desc"]}</p>'
+            f'</section>'
+        )
+    return (
+        f'<div class="model-tabs">'
+        f'{"".join(radios)}'
+        f'<div class="mtab-list">{"".join(labels)}</div>'
+        f'<div class="mtab-panels">{"".join(panels)}</div>'
+        f'</div>'
+    )
 ```
 
 ### 추가 CSS
@@ -289,6 +370,46 @@ def _pred_cell(m: dict | None) -> str:
 .badge-hit { background: var(--green-100); color: var(--green-600); }
 .badge-miss { background: var(--red-100); color: var(--red-600); }
 .badge-pending { background: var(--slate-100); color: var(--slate-500); }
+
+/* CSS-only 모델 설명 탭바 */
+.model-tabs { margin: 16px 0 12px; }
+.mtab-radio { position: absolute; opacity: 0; pointer-events: none; }
+.mtab-list {
+  display: flex; gap: 2px; border-bottom: 2px solid var(--slate-200);
+  flex-wrap: wrap;
+}
+.mtab-label {
+  padding: 8px 16px; cursor: pointer; font-weight: 600;
+  font-size: 0.85rem; color: var(--slate-500);
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  transition: color var(--transition), border-color var(--transition);
+  user-select: none;
+}
+.mtab-label:hover { color: var(--blue-600); }
+
+.mtab-panel { display: none; padding: 16px 4px; line-height: 1.7; color: var(--slate-700); }
+.mtab-panel h3 { font-size: 1rem; color: var(--blue-900); margin-bottom: 8px; }
+.mtab-panel strong { color: var(--slate-900); }
+
+/* radio:checked 시 그 label 활성화 + panel 표시 */
+#mtab-rf:checked          ~ .mtab-list .mtab-label-rf,
+#mtab-lgbm:checked        ~ .mtab-list .mtab-label-lgbm,
+#mtab-lstm:checked        ~ .mtab-list .mtab-label-lstm,
+#mtab-transformer:checked ~ .mtab-list .mtab-label-transformer,
+#mtab-ensemble:checked    ~ .mtab-list .mtab-label-ensemble {
+  color: var(--blue-800); border-bottom-color: var(--blue-600);
+}
+#mtab-rf:checked          ~ .mtab-panels .mtab-panel-rf,
+#mtab-lgbm:checked        ~ .mtab-panels .mtab-panel-lgbm,
+#mtab-lstm:checked        ~ .mtab-panels .mtab-panel-lstm,
+#mtab-transformer:checked ~ .mtab-panels .mtab-panel-transformer,
+#mtab-ensemble:checked    ~ .mtab-panels .mtab-panel-ensemble { display: block; }
+
+/* 키보드 접근성 — focus 시 outline */
+.mtab-radio:focus-visible + .mtab-list .mtab-label,
+.mtab-radio:focus-visible ~ .mtab-list .mtab-label {
+  outline: 2px solid var(--blue-500); outline-offset: 2px;
+}
 ```
 
 모바일 가로 스크롤: `<div style="overflow-x:auto;">` 으로 표 wrap (`_render_prediction_history` 안).
@@ -330,13 +451,15 @@ src/web_app.py            — _render_prediction_history (외부 진입)
 5. `source='live'` 만 — `backtest` row 격리
 6. 다른 symbol row 격리
 
-### `tests/test_web_app.py` — `TestPredictionHistorySection` (5 케이스)
+### `tests/test_web_app.py` — `TestPredictionHistorySection` (7 케이스)
 
 1. 예측 row 0건 → 섹션 없음 (`<h2>예측 정확도</h2>` 부재)
 2. 평가된 row → 요약 카드 마크업 + `<table>` row 마크업 포함
 3. 미평가 row 만 → "평가 대기" 텍스트 + `class="row-pending"` 포함
 4. `<details>` + summary 텍스트 "최근 90일 예측 히스토리"
 5. `prediction_history.list_history` 가 raise → 섹션 누락 + result_html 정상
+6. **모델 탭바 마크업** — 섹션이 렌더되면 `id="mtab-rf"`, `id="mtab-ensemble"` 등 5개 radio + label + panel 모두 포함, RF 라디오는 `checked`
+7. **모델 설명 텍스트** — 각 panel 본문에 모델 설명 일부 ("Random Forest", "그래디언트 부스팅", "어텐션" 등) 포함
 
 ## 9. 마이그레이션 / 배포
 
@@ -348,7 +471,7 @@ src/web_app.py            — _render_prediction_history (외부 진입)
 
 - 종합 history 페이지 (`/history`) — 종목별 진입점만 (follow-up 검토)
 - 차트/sparkline — 표만, 시각화는 추후
-- 모델별 토글/필터 — 5개 항상 표시
+- **탭바가 데이터 필터링** — 탭은 모델 설명만 전환, 시간순 표는 5 모델 모두 그대로 표시 (가벼운 디자인 — 옵션 A)
 - CSV/JSON 내보내기 — 추후
 - 백테스트 row 통합 — `source='live'` 만, backtest 결과는 별도 페이지
 - 평가 대기 row 자동 갱신 (실시간 폴링) — 정적 SSR
