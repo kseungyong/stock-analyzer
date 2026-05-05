@@ -129,13 +129,15 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
         return None
 
 
-def run_full_analysis(config: dict) -> str | None:
-    """전체 종목 분석 + 리포트 생성."""
+def collect_analyses(config: dict) -> list[dict]:
+    """전체 종목 분석을 병렬 실행하고 성공한 결과 list 를 반환한다.
+
+    실패한 종목은 결과에서 제외된다 (logger.warning 으로 표시됨).
+    """
     stocks = get_all_stocks(config)
     logger.info("분석 시작: %d개 종목", len(stocks))
 
-    analyses = []
-    # 종목별 분석을 병렬로 실행 (ML은 CPU 집약적이므로 max_workers 제한)
+    analyses: list[dict] = []
     max_workers = min(len(stocks), 3)
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         future_to_stock = {
@@ -148,11 +150,15 @@ def run_full_analysis(config: dict) -> str | None:
             result = future.result()
             if result:
                 analyses.append(result)
+    return analyses
 
+
+def run_full_analysis(config: dict) -> str | None:
+    """전체 종목 분석 + 단일 다이제스트 HTML 생성."""
+    analyses = collect_analyses(config)
     if not analyses:
         logger.warning("분석 결과 없음")
         return None
-
     html = generate_report(analyses)
     logger.info("리포트 생성 완료: %d개 종목", len(analyses))
     return html

@@ -406,26 +406,65 @@ class TestStockAll:
 
 
 class TestAnalyzeAllUpsert:
-    def test_full_analysis_puts_all_cache(self, client, monkeypatch):
+    def _setup(self, monkeypatch):
+        """공통 stub — 2종목 (한국 1, 미국 1)."""
         import src.web_app as wa
         from src import analysis_cache as ac
 
-        captured = {}
-        monkeypatch.setattr("main.run_full_analysis", lambda cfg: "<p>digest</p>")
-        monkeypatch.setattr(ac, "put", lambda *a, **k: captured.update({"args": a, "kwargs": k}))
+        fake_analyses = [
+            {"symbol": "AAPL", "name": "Apple"},
+            {"symbol": "005930.KS", "name": "삼성전자"},
+        ]
+        fake_config = {"stocks": {
+            "us":    [{"symbol": "AAPL", "name": "Apple"}],
+            "korea": [{"symbol": "005930.KS", "name": "삼성전자"}],
+        }}
+        monkeypatch.setattr("main.collect_analyses", lambda cfg: fake_analyses)
+        monkeypatch.setattr("main.load_config", lambda: fake_config)
+
+        captured: list[tuple] = []
+        monkeypatch.setattr(
+            ac, "put",
+            lambda *a, **k: captured.append((a, k)),
+        )
+
+        # generate_report 는 종목 수에 따라 다른 HTML 반환
+        def fake_gen(items):
+            if len(items) == 1:
+                return f"<p>single:{items[0]['symbol']}</p>"
+            return f"<p>digest:{len(items)}</p>"
+        monkeypatch.setattr("src.report_generator.generate_report", fake_gen)
 
         wa._jobs.clear()
         wa._jobs["full1"] = {
             "status": "running", "symbol": "ALL", "name": "전체 종목",
             "result_html": None, "error": None, "started_at": "16:00:00",
         }
+        return wa, captured
+
+    def test_full_analysis_puts_all_cache(self, client, monkeypatch):
+        wa, captured = self._setup(monkeypatch)
         wa._run_full_analysis_bg("full1")
-        # put("ALL", "all", "<p>digest</p>", source="manual")
-        args = captured["args"]
-        assert args[0] == "ALL"
-        assert args[1] == "all"
-        assert args[2] == "<p>digest</p>"
-        assert captured["kwargs"].get("source") == "manual"
+        # put("ALL", "all", "<p>digest:2</p>", source="manual")
+        all_calls = [c for c in captured if c[0][0] == "ALL"]
+        assert len(all_calls) == 1
+        args, kwargs = all_calls[0]
+        assert args == ("ALL", "all", "<p>digest:2</p>")
+        assert kwargs.get("source") == "manual"
+
+    def test_full_analysis_puts_per_symbol_cache(self, client, monkeypatch):
+        """일괄 분석이 종목별 row 도 함께 UPSERT — 카드 신선도 갱신용."""
+        wa, captured = self._setup(monkeypatch)
+        wa._run_full_analysis_bg("full1")
+
+        # 종목별 put 호출 — AAPL (us), 005930.KS (korea) 각 1회
+        symbol_calls = {c[0][0]: c[0] for c in captured if c[0][0] != "ALL"}
+        assert "AAPL" in symbol_calls
+        assert symbol_calls["AAPL"] == ("AAPL", "us", "<p>single:AAPL</p>")
+        assert "005930.KS" in symbol_calls
+        assert symbol_calls["005930.KS"] == (
+            "005930.KS", "korea", "<p>single:005930.KS</p>"
+        )
 
 
 class TestIndexFreshness:

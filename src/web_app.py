@@ -206,23 +206,48 @@ def _safe_cache_get(cache_key: str) -> dict | None:
 
 
 def _run_full_analysis_bg(job_id: str) -> None:
-    """백그라운드 스레드에서 전체 분석 실행. 성공 시 analysis_cache.put('ALL')."""
+    """백그라운드 스레드에서 전체 분석 실행. 종목별 + ALL row 모두 UPSERT."""
     logger.info("전체 분석 시작: job_id=%s", job_id)
     try:
-        from main import run_full_analysis, load_config
+        from main import collect_analyses, load_config
+        from src.report_generator import generate_report
 
         config = load_config()
-        html = run_full_analysis(config)
-        if html is None:
+        analyses = collect_analyses(config)
+        if not analyses:
             logger.warning("전체 분석 결과 없음: job_id=%s", job_id)
             _jobs_set(job_id, status="error", error="분석 결과 없음")
-        else:
-            _jobs_set(job_id, status="done", result_html=html)
+            return
+
+        # 종목별 cache UPSERT (개별 카드 신선도 갱신)
+        symbol_to_market = {
+            s["symbol"]: market
+            for market, group in config.get("stocks", {}).items()
+            for s in group
+        }
+        cached = 0
+        for r in analyses:
+            sym = r["symbol"]
             try:
-                analysis_cache.put("ALL", "all", html, source="manual")
+                ind_html = generate_report([r])
+                analysis_cache.put(
+                    sym, symbol_to_market.get(sym, "us"), ind_html, source="manual"
+                )
+                cached += 1
             except Exception as e:
-                logger.warning("analysis_cache.put('ALL') 실패: %s", e)
-            logger.info("전체 분석 완료: job_id=%s", job_id)
+                logger.warning("종목별 cache.put 실패 — %s: %s", sym, e)
+
+        # 다이제스트 HTML + ALL row
+        full_html = generate_report(analyses)
+        _jobs_set(job_id, status="done", result_html=full_html)
+        try:
+            analysis_cache.put("ALL", "all", full_html, source="manual")
+        except Exception as e:
+            logger.warning("analysis_cache.put('ALL') 실패: %s", e)
+        logger.info(
+            "전체 분석 완료: job_id=%s 종목별 캐시=%d/%d, ALL 갱신",
+            job_id, cached, len(analyses),
+        )
     except Exception as e:
         logger.exception("전체 분석 오류: job_id=%s error=%s", job_id, e)
         _jobs_set(job_id, status="error", error=str(e))
