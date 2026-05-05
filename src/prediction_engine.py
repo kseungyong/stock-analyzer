@@ -143,7 +143,13 @@ class PredictionEngine:
         return f"{cache_key}_{last_date}"
 
     def _run_parallel(self, df: pd.DataFrame) -> dict:
-        """ProcessPoolExecutor로 모델별 병렬 실행. Pool crash 시 재생성 후 1회 재시도."""
+        """ProcessPoolExecutor로 모델별 병렬 실행. Pool crash 시 재생성 후 1회 재시도.
+
+        macOS gunicorn 환경처럼 fork+ML 라이브러리가 segfault 일으키는 경우
+        PREDICTION_ENGINE_NO_PROCESS_POOL=1 환경변수로 ProcessPool 자체를 우회한다.
+        """
+        if os.environ.get("PREDICTION_ENGINE_NO_PROCESS_POOL", "").strip().lower() in ("1", "true", "yes"):
+            return self._run_fallback(df)
         for attempt in range(2):
             try:
                 pool = _get_pool()
@@ -184,18 +190,18 @@ class PredictionEngine:
         return self._run_fallback(df)  # unreachable but satisfies type checker
 
     def _run_fallback(self, df: pd.DataFrame) -> dict:
-        """ThreadPoolExecutor 기반 폴백 (ProcessPool 완전 실패 시)."""
-        from concurrent.futures import ThreadPoolExecutor
+        """순차 실행 폴백 (ProcessPool 완전 실패 또는 비활성화 시).
+
+        macOS native ML 라이브러리(Prophet/cmdstanpy 등)가 thread 동시 실행에서도
+        간헐적 segfault 일으키므로, 안전 우선으로 순차 실행을 기본으로 한다.
+        """
         results: dict = {}
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_name = {executor.submit(fn, df): name for name, fn in self._MODEL_FUNCS.items()}
-            for future in as_completed(future_to_name):
-                name = future_to_name[future]
-                try:
-                    results[name] = future.result()
-                except Exception as e:
-                    logger.warning("폴백 모델 실패: %s — %s", name, e)
-                    results[name] = {"error": str(e)}
+        for name, fn in self._MODEL_FUNCS.items():
+            try:
+                results[name] = fn(df)
+            except Exception as e:
+                logger.warning("폴백 모델 실패: %s — %s", name, e)
+                results[name] = {"error": str(e)}
         results["ensemble"] = predict_ensemble(results)
         return {
             "prophet": results.get("prophet"),
