@@ -239,7 +239,17 @@ def main():
         return
 
     if args.start_scheduler:
-        start_scheduler(daily_job, config["schedule"])
+        from apscheduler.triggers.cron import CronTrigger
+        extra_jobs = {
+            "backfill_daily": {
+                "func": lambda: prediction_history.backfill_all(fetch_fn=fetch_stock_data),
+                "trigger": CronTrigger(
+                    hour=18, minute=0, timezone="Asia/Seoul"
+                ),
+                "name": "Daily Prediction Backfill",
+            }
+        }
+        start_scheduler(daily_job, config["schedule"], extra_jobs=extra_jobs)
         return
 
     if args.run_now:
