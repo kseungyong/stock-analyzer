@@ -748,7 +748,7 @@ class TestHistoryTable:
              models=None):
         if models is None:
             models = {
-                m: {"direction": "상승", "confidence": 0.7, "hit": ensemble_hit}
+                m: {"direction": "상승", "confidence": 70.0, "hit": ensemble_hit}
                 for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
             }
         return {
@@ -777,7 +777,7 @@ class TestHistoryTable:
     def test_miss_row_shows_red_verdict(self, client):
         from src.web_app import _render_history_table
         miss_models = {
-            m: {"direction": "상승", "confidence": 0.7, "hit": 0}
+            m: {"direction": "상승", "confidence": 70.0, "hit": 0}
             for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
         }
         html = _render_history_table([self._row(
@@ -790,7 +790,7 @@ class TestHistoryTable:
     def test_pending_row_is_grey(self, client):
         from src.web_app import _render_history_table
         pending_models = {
-            m: {"direction": "하락", "confidence": 0.6, "hit": None}
+            m: {"direction": "하락", "confidence": 60.0, "hit": None}
             for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
         }
         html = _render_history_table([self._row(
@@ -804,7 +804,7 @@ class TestHistoryTable:
     def test_missing_model_cell_shows_dash(self, client):
         from src.web_app import _render_history_table
         partial = {
-            "rf": {"direction": "상승", "confidence": 0.7, "hit": 1},
+            "rf": {"direction": "상승", "confidence": 70.0, "hit": 1},
             # lgbm/lstm/transformer/ensemble 누락
         }
         html = _render_history_table([self._row(
@@ -815,9 +815,9 @@ class TestHistoryTable:
 
     def test_arrow_direction(self, client):
         from src.web_app import _render_history_table
-        up_models = {m: {"direction": "상승", "confidence": 0.7, "hit": 1}
+        up_models = {m: {"direction": "상승", "confidence": 70.0, "hit": 1}
                      for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")}
-        down_models = {m: {"direction": "하락", "confidence": 0.6, "hit": 0}
+        down_models = {m: {"direction": "하락", "confidence": 60.0, "hit": 0}
                        for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")}
         html = _render_history_table([
             self._row(td=1730086400, ensemble_hit=1, actual=105.0, models=up_models),
@@ -825,6 +825,29 @@ class TestHistoryTable:
         ])
         assert "🔼" in html  # 상승
         assert "🔽" in html  # 하락
+
+    def test_confidence_displayed_as_integer_percent(self, client):
+        """confidence 는 DB 에 0~100 단위로 저장됨 — 표시도 그대로 정수 % (곱셈 X)."""
+        from src.web_app import _render_history_table
+        models = {
+            "rf":          {"direction": "상승", "confidence": 75.0, "hit": 1},
+            "lgbm":        {"direction": "상승", "confidence": 68.5, "hit": 1},
+            "lstm":        {"direction": "하락", "confidence": 51.4, "hit": 0},
+            "transformer": {"direction": "상승", "confidence": 100.0, "hit": 1},
+            "ensemble":    {"direction": "상승", "confidence": 73.7, "hit": 1},
+        }
+        html = _render_history_table([self._row(
+            ensemble_hit=1, actual=105.0, models=models,
+        )])
+        # 75.0 → "75%", 68.5 → "69%", 51.4 → "51%", 100 → "100%", 73.7 → "74%"
+        assert "75%" in html
+        assert "69%" in html
+        assert "51%" in html
+        assert "100%" in html
+        assert "74%" in html
+        # 곱셈된 값 (7500%, 6850% 등) 는 절대 안 나타남
+        assert "7500%" not in html
+        assert "6850%" not in html
 
 
 class TestRenderPredictionHistory:
@@ -863,7 +886,7 @@ class TestRenderPredictionHistory:
                                 "base_close": 100.0, "actual_close": 105.0,
                                 "ensemble_hit": 1,
                                 "models": {
-                                    m: {"direction": "상승", "confidence": 0.7, "hit": 1}
+                                    m: {"direction": "상승", "confidence": 70.0, "hit": 1}
                                     for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
                                 },
                             }])
@@ -890,7 +913,7 @@ class TestRenderPredictionHistory:
                                 "target_date": 1730000000, "ts": 1729900000,
                                 "base_close": 100.0, "actual_close": 105.0,
                                 "ensemble_hit": 1,
-                                "models": {"ensemble": {"direction": "상승", "confidence": 0.7, "hit": 1}},
+                                "models": {"ensemble": {"direction": "상승", "confidence": 70.0, "hit": 1}},
                             }])
         html = _render_prediction_history("AAPL")
         i_header = html.index("예측 정확도")
@@ -928,7 +951,7 @@ class TestPredictionHistorySection:
                                 "base_close": 100.0, "actual_close": 105.0,
                                 "ensemble_hit": 1,
                                 "models": {
-                                    m: {"direction": "상승", "confidence": 0.7, "hit": 1}
+                                    m: {"direction": "상승", "confidence": 70.0, "hit": 1}
                                     for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
                                 },
                             }])
@@ -952,7 +975,7 @@ class TestPredictionHistorySection:
                                 "base_close": 100.0, "actual_close": None,
                                 "ensemble_hit": None,
                                 "models": {
-                                    m: {"direction": "하락", "confidence": 0.6, "hit": None}
+                                    m: {"direction": "하락", "confidence": 60.0, "hit": None}
                                     for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
                                 },
                             }])
@@ -972,7 +995,7 @@ class TestPredictionHistorySection:
                                 "target_date": 1730000000, "ts": 1729900000,
                                 "base_close": 100.0, "actual_close": 105.0,
                                 "ensemble_hit": 1,
-                                "models": {"ensemble": {"direction": "상승", "confidence": 0.7, "hit": 1}},
+                                "models": {"ensemble": {"direction": "상승", "confidence": 70.0, "hit": 1}},
                             }])
         resp = client.get("/stock/AAPL")
         assert b'<details' in resp.data

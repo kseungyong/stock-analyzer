@@ -1056,11 +1056,16 @@ def _render_hit_rate_summary(rates: dict) -> str:
 
 
 def _pred_cell(m: dict | None) -> str:
-    """시간순 표의 모델 셀 — 방향 + 신뢰도 % + hit/miss/pending 색상."""
+    """시간순 표의 모델 셀 — 방향 + 신뢰도 % + hit/miss/pending 색상.
+
+    DB 의 confidence 컬럼은 이미 0~100 단위 (percentage) 로 저장됨.
+    예측 모델이 반환하는 값을 그대로 저장하며, 별도 정규화 X.
+    """
     if m is None:
         return '<td>—</td>'
     arrow = "🔼" if m["direction"] == "상승" else "🔽"
-    pct = int(m["confidence"] * 100)
+    # round-half-up (Python 의 round 는 banker's rounding 이라 68.5 → 68)
+    pct = int(m["confidence"] + 0.5)
     if m.get("hit") is None:
         cls = "pending"
     elif m["hit"] == 1:
