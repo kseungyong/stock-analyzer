@@ -230,3 +230,85 @@ def backfill_all(fetch_fn: Callable[[str], pd.DataFrame]) -> dict:
         len(symbols), total_evaluated, len(failed),
     )
     return {"evaluated": total_evaluated, "failed_symbols": failed}
+
+
+def insert_backtest(rows: list[dict], backtest_id: str) -> None:
+    """백테스트 walk-forward 결과 일괄 저장 (단일 트랜잭션)."""
+    if not rows:
+        return
+    tuples = [
+        (r["symbol"], r["ts"], r["target_date"], r["model"],
+         r["direction"], r["confidence"], r["actual_close"],
+         r["base_close"], r["hit"], r["evaluated_at"], "backtest", backtest_id)
+        for r in rows
+    ]
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            conn.execute("BEGIN")
+            try:
+                conn.executemany(
+                    """INSERT OR IGNORE INTO predictions
+                       (symbol, ts, target_date, model, direction, confidence,
+                        actual_close, base_close, hit, evaluated_at, source, backtest_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    tuples,
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+
+def hit_rate_by_model(
+    symbol: str,
+    source: str = "live",
+    backtest_id: str | None = None,
+) -> dict:
+    """심볼의 모델별 hit rate. 평가된(hit IS NOT NULL) 행 기준."""
+    sql = """SELECT model, COUNT(*) AS n, AVG(CAST(hit AS REAL)) AS rate
+             FROM predictions
+             WHERE symbol = ? AND source = ? AND hit IS NOT NULL"""
+    params: list = [symbol, source]
+    if backtest_id is not None:
+        sql += " AND backtest_id = ?"
+        params.append(backtest_id)
+    sql += " GROUP BY model HAVING n > 0"
+
+    with closing(_connect()) as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    return {
+        model: {"hit_rate": float(rate), "n": int(n)}
+        for model, n, rate in rows
+    }
+
+
+def get_backtest_results(backtest_id: str) -> dict:
+    """백테스트 1회분 결과: 모델별 hit rate + walk-forward 행들."""
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            """SELECT symbol, ts, target_date, model, direction, confidence,
+                      actual_close, base_close, hit, evaluated_at
+               FROM predictions
+               WHERE source = 'backtest' AND backtest_id = ?
+               ORDER BY target_date, model""",
+            (backtest_id,),
+        ).fetchall()
+
+    if not rows:
+        return {"backtest_id": backtest_id, "summary": {}, "rows": []}
+
+    symbol = rows[0][0]
+    summary = hit_rate_by_model(symbol, source="backtest", backtest_id=backtest_id)
+    return {
+        "backtest_id": backtest_id,
+        "summary": summary,
+        "rows": [
+            {
+                "symbol": r[0], "ts": r[1], "target_date": r[2], "model": r[3],
+                "direction": r[4], "confidence": r[5], "actual_close": r[6],
+                "base_close": r[7], "hit": r[8], "evaluated_at": r[9],
+            }
+            for r in rows
+        ],
+    }

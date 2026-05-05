@@ -388,3 +388,91 @@ class TestBackfillAll:
         result = ph.backfill_all(fetch_fn=fetch_fn)
         assert called == []
         assert result["evaluated"] == 0
+
+
+class TestHitRateByModel:
+    def _seed(self, symbol, model, direction, base, actual, target):
+        ph.insert_live(
+            symbol,
+            {"random_forest" if model == "rf" else "lightgbm":
+                {"direction": direction, "confidence": 65.0}},
+            base_close=base,
+            target_date=target,
+        )
+        with sqlite3.connect(ph._DB_PATH) as conn:
+            hit = ph._compute_hit(direction, base, actual)
+            conn.execute(
+                """UPDATE predictions SET actual_close=?, hit=?, evaluated_at=?
+                   WHERE symbol=? AND model=? AND target_date=?""",
+                (actual, hit, int(time.time()), symbol, model, target),
+            )
+
+    def test_returns_hit_rate(self, tmp_db):
+        ph.init_db()
+        self._seed("AAPL", "rf", "상승", 100, 110, 1000001)
+        self._seed("AAPL", "rf", "상승", 100, 105, 1000002)
+        self._seed("AAPL", "rf", "하락", 100, 110, 1000003)
+        result = ph.hit_rate_by_model("AAPL", source="live")
+        assert result["rf"]["n"] == 3
+        assert result["rf"]["hit_rate"] == pytest.approx(2 / 3, abs=1e-6)
+
+    def test_omits_models_with_no_data(self, tmp_db):
+        ph.init_db()
+        self._seed("AAPL", "rf", "상승", 100, 110, 1000001)
+        result = ph.hit_rate_by_model("AAPL", source="live")
+        assert "rf" in result
+        assert "lgbm" not in result
+
+    def test_unevaluated_excluded(self, tmp_db):
+        ph.init_db()
+        ph.insert_live("AAPL", {"random_forest": {"direction": "상승", "confidence": 65.0}},
+                       100, 1000001)
+        result = ph.hit_rate_by_model("AAPL", source="live")
+        assert result == {}
+
+    def test_filters_by_source(self, tmp_db):
+        ph.init_db()
+        self._seed("AAPL", "rf", "상승", 100, 110, 1000001)
+        result = ph.hit_rate_by_model("AAPL", source="backtest")
+        assert "rf" not in result
+
+
+class TestInsertBacktest:
+    def test_inserts_backtest_rows(self, tmp_db):
+        ph.init_db()
+        rows = [
+            {"symbol": "AAPL", "ts": 1000000, "target_date": 1000086400,
+             "model": "rf", "direction": "상승", "confidence": 65.0,
+             "base_close": 100.0, "actual_close": 105.0, "hit": 1,
+             "evaluated_at": 1000172800},
+            {"symbol": "AAPL", "ts": 1000000, "target_date": 1000086400,
+             "model": "lgbm", "direction": "상승", "confidence": 70.0,
+             "base_close": 100.0, "actual_close": 105.0, "hit": 1,
+             "evaluated_at": 1000172800},
+        ]
+        ph.insert_backtest(rows, backtest_id="abc123")
+        with sqlite3.connect(tmp_db) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM predictions WHERE source='backtest' AND backtest_id='abc123'"
+            ).fetchone()[0]
+        assert count == 2
+
+
+class TestGetBacktestResults:
+    def test_returns_summary(self, tmp_db):
+        ph.init_db()
+        rows = []
+        for i, (rf_hit, lgbm_hit) in enumerate([(1, 0), (1, 1), (0, 0)]):
+            rows.append({"symbol": "AAPL", "ts": 1000000 + i, "target_date": 1000086400 + i,
+                         "model": "rf", "direction": "상승", "confidence": 65.0,
+                         "base_close": 100.0, "actual_close": 105.0, "hit": rf_hit,
+                         "evaluated_at": 1000172800 + i})
+            rows.append({"symbol": "AAPL", "ts": 1000000 + i, "target_date": 1000086400 + i,
+                         "model": "lgbm", "direction": "상승", "confidence": 70.0,
+                         "base_close": 100.0, "actual_close": 105.0, "hit": lgbm_hit,
+                         "evaluated_at": 1000172800 + i})
+        ph.insert_backtest(rows, backtest_id="run42")
+        result = ph.get_backtest_results("run42")
+        assert result["summary"]["rf"]["hit_rate"] == pytest.approx(2 / 3, abs=1e-6)
+        assert result["summary"]["lgbm"]["hit_rate"] == pytest.approx(1 / 3, abs=1e-6)
+        assert len(result["rows"]) == 6
