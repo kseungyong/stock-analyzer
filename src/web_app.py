@@ -1749,6 +1749,53 @@ def api_stocks_search():
     return jsonify(results)
 
 
+def _signal_json(row: dict) -> dict:
+    """analysis_cache row 를 외부 API 응답용 JSON dict 로 변환.
+
+    Spec: docs/superpowers/specs/2026-05-06-auto-trader-integration-design.md
+    """
+    return {
+        "symbol": row["cache_key"],
+        "name": row["cache_key"],  # cache 에 종목명 없음 — symbol 그대로 (follow-up 가능)
+        "market": row["market"],
+        "generated_at_kst": _format_kst(row["generated_at"]),
+        "generated_at_unix": row["generated_at"],
+        "is_fresh": analysis_cache.is_fresh(row, int(time.time())),
+        "tech": {
+            "signal": row.get("signal_value"),
+            "score": row.get("signal_score"),
+        },
+        "bnf": {
+            "signal": row.get("bnf_signal_value"),
+            "score": row.get("bnf_signal_score"),
+        },
+    }
+
+
+@app.route("/api/signal/<path:symbol>")
+def api_signal(symbol: str):
+    """외부 시스템용 (예: auto-trader) — 캐시된 Tech + BNF 시그널 JSON.
+
+    Returns:
+        200 + signal JSON dict (cache hit)
+        404 + {"error": "no_cache", "symbol": ...} (cache miss)
+        400 + {"error": "invalid_symbol", "symbol": ...} (sanitize/validate 실패)
+    """
+    sym = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(sym):
+        return jsonify({"error": "invalid_symbol", "symbol": symbol}), 400
+
+    row = _safe_cache_get(sym)
+    if row is None:
+        return jsonify({
+            "error": "no_cache",
+            "symbol": sym,
+            "message": "분석 이력 없음. POST /analyze/<symbol> 로 트리거 후 polling.",
+        }), 404
+
+    return jsonify(_signal_json(row))
+
+
 @app.route("/backtest/<path:symbol>", methods=["POST"])
 def start_backtest(symbol: str):
     """백테스트 실행 트리거. 동시 1개로 제한."""

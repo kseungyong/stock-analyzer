@@ -1241,3 +1241,49 @@ class TestIndexCardBnfBadge:
             conn.execute("DELETE FROM analysis_cache WHERE cache_key = 'AAPL'")
         resp = client.get("/")
         assert b"BNF " not in resp.data
+
+
+class TestApiSignal:
+    def test_cache_hit_returns_json(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "auto_cron",
+               signal_value="매수", signal_score=3,
+               bnf_signal_value="관망", bnf_signal_score=1)
+        resp = client.get("/api/signal/AAPL")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["symbol"] == "AAPL"
+        assert data["market"] == "us"
+        assert data["tech"] == {"signal": "매수", "score": 3}
+        assert data["bnf"] == {"signal": "관망", "score": 1}
+        assert isinstance(data["generated_at_unix"], int)
+        assert "KST" in data["generated_at_kst"]
+        assert isinstance(data["is_fresh"], bool)
+
+    def test_cache_miss_returns_404(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        import sqlite3
+        with sqlite3.connect(ac._DB_PATH) as conn:
+            conn.execute("DELETE FROM analysis_cache WHERE cache_key='UNKNOWN'")
+        resp = client.get("/api/signal/UNKNOWN")
+        assert resp.status_code == 404
+        data = resp.get_json()
+        assert data["error"] == "no_cache"
+        assert data["symbol"] == "UNKNOWN"
+
+    def test_invalid_symbol_returns_400(self, client):
+        resp = client.get("/api/signal/<script>")
+        assert resp.status_code == 400
+
+    def test_partial_signal_returns_null_fields(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "auto_cron",
+               signal_value="매수", signal_score=2)  # bnf 없이
+        resp = client.get("/api/signal/AAPL")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["tech"] == {"signal": "매수", "score": 2}
+        assert data["bnf"] == {"signal": None, "score": None}
