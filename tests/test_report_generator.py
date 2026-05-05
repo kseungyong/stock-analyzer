@@ -60,6 +60,16 @@ _mock_matplotlib()
 from src.report_generator import _signal_color, generate_report  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _patch_hit_rate(request):
+    """hit_rate_by_model이 실제 DB를 사용하지 않도록 기본 패치. TestHitRateSection은 자체 패치를 사용."""
+    if request.node.cls is not None and request.node.cls.__name__ == "TestHitRateSection":
+        yield  # TestHitRateSection은 각 테스트에서 직접 패치
+        return
+    with patch("src.report_generator.prediction_history.hit_rate_by_model", return_value={}):
+        yield
+
+
 def _make_df(rows: int = 60) -> pd.DataFrame:
     idx = pd.date_range("2023-01-01", periods=rows)
     return pd.DataFrame(
@@ -169,3 +179,67 @@ class TestGenerateReport:
         analysis["name"] = "<script>alert(1)</script>"
         html = generate_report([analysis])
         assert "<script>alert(1)</script>" not in html
+
+
+from unittest.mock import patch
+
+
+class TestHitRateSection:
+    def _analysis(self, symbol="AAPL"):
+        idx = pd.date_range("2026-01-01", periods=30, freq="B")
+        df = pd.DataFrame({
+            "Close": list(range(100, 130)),
+            "Open": list(range(100, 130)),
+            "High": [c+2 for c in range(100, 130)],
+            "Low": [c-2 for c in range(100, 130)],
+            "Volume": [1000000] * 30,
+            "RSI": [50.0] * 30,
+            "MACD": [0.0] * 30,
+            "MACD_Signal": [0.0] * 30,
+            "MACD_Hist": [0.0] * 30,
+            "MA5": list(range(100, 130)),
+            "MA20": list(range(100, 130)),
+            "BB_Upper": [c*1.02 for c in range(100, 130)],
+            "BB_Lower": [c*0.98 for c in range(100, 130)],
+        }, index=idx)
+        return {
+            "name": "Apple",
+            "symbol": symbol,
+            "df": df,
+            "signal": {"signal": "관망", "score": 0, "close": 129, "rsi": 50, "reasons": [], "indicators": []},
+            "prediction": {
+                "prophet": None,
+                "random_forest": {"direction": "상승", "confidence": 65.0},
+                "lightgbm": {"direction": "상승", "confidence": 70.0},
+                "lstm": {"direction": "하락", "confidence": 55.0},
+                "transformer": {"direction": "상승", "confidence": 60.0},
+                "ensemble": {"direction": "상승", "confidence": 67.0},
+            },
+            "news": [],
+            "sentiment": {"label": "뉴스 없음", "score": 0.0, "details": []},
+        }
+
+    @patch("src.report_generator.prediction_history.hit_rate_by_model")
+    def test_renders_hit_rate_when_data_exists(self, mock_hr):
+        mock_hr.return_value = {
+            "rf": {"hit_rate": 0.62, "n": 21},
+            "lgbm": {"hit_rate": 0.67, "n": 21},
+        }
+        from src.report_generator import generate_report
+        html_out = generate_report([self._analysis()])
+        assert "62.0%" in html_out
+        assert "21" in html_out
+
+    @patch("src.report_generator.prediction_history.hit_rate_by_model")
+    def test_omits_section_when_no_data(self, mock_hr):
+        mock_hr.return_value = {}
+        from src.report_generator import generate_report
+        html_out = generate_report([self._analysis()])
+        assert "누적 적중률" not in html_out
+
+    @patch("src.report_generator.prediction_history.hit_rate_by_model")
+    def test_marks_low_n_as_insufficient(self, mock_hr):
+        mock_hr.return_value = {"rf": {"hit_rate": 0.6, "n": 5}}
+        from src.report_generator import generate_report
+        html_out = generate_report([self._analysis()])
+        assert "데이터 부족" in html_out

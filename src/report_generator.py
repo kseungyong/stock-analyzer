@@ -6,6 +6,8 @@ import io
 from datetime import datetime
 from pathlib import Path
 
+from src import prediction_history
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -164,6 +166,40 @@ def _render_ml_table(pred: dict) -> str:
     )
 
 
+def _render_hit_rate_section(symbol: str) -> str:
+    """모델별 누적 hit rate를 표 형태로 렌더링. 데이터 없으면 빈 문자열."""
+    rates = prediction_history.hit_rate_by_model(symbol, source="live")
+    if not rates:
+        return ""
+
+    rows = []
+    model_label = {
+        "rf": "RandomForest", "lgbm": "LightGBM",
+        "lstm": "LSTM", "transformer": "Transformer", "ensemble": "Ensemble",
+    }
+    for model_key in ("rf", "lgbm", "lstm", "transformer", "ensemble"):
+        info = rates.get(model_key)
+        if not info:
+            continue
+        rate_pct = info["hit_rate"] * 100
+        n = info["n"]
+        if n < 10:
+            display = f'<span style="color:#999;">데이터 부족 (n={n})</span>'
+        else:
+            display = f"{rate_pct:.1f}% (n={n})"
+        rows.append(f"<tr><td>{model_label[model_key]}</td><td>{display}</td></tr>")
+
+    if not rows:
+        return ""
+
+    return (
+        '<h4 class="section-title">📊 누적 적중률 (live tracking)</h4>'
+        '<table class="analysis-table">'
+        '<tr><th>모델</th><th>Hit Rate</th></tr>'
+        f"{''.join(rows)}</table>"
+    )
+
+
 def _render_news(news_items: list[dict]) -> str:
     """뉴스 목록 HTML을 반환한다."""
     if not news_items:
@@ -219,6 +255,7 @@ def _render_stock_card(item: dict) -> str:
     signal_cls = _signal_class(sig["signal"])
     indicators_html = _render_indicators_table(sig.get("indicators", []))
     ml_html = _render_ml_table(pred)
+    hit_rate_html = _render_hit_rate_section(item["symbol"])
     news_html = _render_news(item.get("news", []))
     sentiment_html = _render_sentiment(item.get("sentiment", {}))
 
@@ -233,6 +270,7 @@ def _render_stock_card(item: dict) -> str:
         {indicators_html}
         <h4 class="section-title">ML 예측</h4>
         {ml_html}
+        {hit_rate_html}
         <img class="stock-chart" src="data:image/png;base64,{chart_b64}" alt="{name} chart"/>
         {news_html}
     </div>"""
