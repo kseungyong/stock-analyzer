@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS analysis_cache (
     market         TEXT NOT NULL,
     result_html    TEXT NOT NULL,
     generated_at   INTEGER NOT NULL,
-    source         TEXT NOT NULL
+    source         TEXT NOT NULL,
+    signal_value   TEXT,
+    signal_score   INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_cache_market
@@ -46,11 +48,38 @@ def init_db() -> None:
     with _writer_lock:
         with closing(_connect()) as conn:
             conn.executescript(_SCHEMA)
+            _migrate(conn)
     logger.info("analysis_cache DB 초기화 완료: %s", _DB_PATH)
 
 
-def put(cache_key: str, market: str, result_html: str, source: str) -> None:
-    """analysis_cache UPSERT. 같은 cache_key 존재 시 덮어쓴다."""
+def _migrate(conn: sqlite3.Connection) -> None:
+    """기존 DB 에 누락된 컬럼을 추가하는 멱등 마이그레이션.
+
+    PRAGMA table_info 로 컬럼 존재 확인 후 조건부 ALTER. SQLite 의 ALTER TABLE
+    ADD COLUMN 은 IF NOT EXISTS 미지원이라 명시적 체크 필요.
+    """
+    cur = conn.execute("PRAGMA table_info(analysis_cache)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "signal_value" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN signal_value TEXT")
+    if "signal_score" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN signal_score INTEGER")
+
+
+def put(
+    cache_key: str,
+    market: str,
+    result_html: str,
+    source: str,
+    *,
+    signal_value: str | None = None,
+    signal_score: int | None = None,
+) -> None:
+    """analysis_cache UPSERT. 같은 cache_key 존재 시 덮어쓴다.
+
+    signal_value/signal_score 가 None 이면 NULL 저장 — UPSERT 시 기존 값을 NULL 로
+    덮어쓰는 효과 (호출자가 명시적으로 전달해야 보존).
+    """
     now_unix = int(time.time())
     with _writer_lock:
         with closing(_connect()) as conn:
@@ -58,14 +87,18 @@ def put(cache_key: str, market: str, result_html: str, source: str) -> None:
             try:
                 conn.execute(
                     """INSERT INTO analysis_cache
-                       (cache_key, market, result_html, generated_at, source)
-                       VALUES (?, ?, ?, ?, ?)
+                       (cache_key, market, result_html, generated_at, source,
+                        signal_value, signal_score)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(cache_key) DO UPDATE SET
                          market       = excluded.market,
                          result_html  = excluded.result_html,
                          generated_at = excluded.generated_at,
-                         source       = excluded.source""",
-                    (cache_key, market, result_html, now_unix, source),
+                         source       = excluded.source,
+                         signal_value = excluded.signal_value,
+                         signal_score = excluded.signal_score""",
+                    (cache_key, market, result_html, now_unix, source,
+                     signal_value, signal_score),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -77,7 +110,8 @@ def get(cache_key: str) -> dict | None:
     """cache_key 의 row 를 dict 로 반환. 없으면 None."""
     with closing(_connect()) as conn:
         row = conn.execute(
-            """SELECT cache_key, market, result_html, generated_at, source
+            """SELECT cache_key, market, result_html, generated_at, source,
+                      signal_value, signal_score
                FROM analysis_cache WHERE cache_key = ?""",
             (cache_key,),
         ).fetchone()
@@ -89,6 +123,8 @@ def get(cache_key: str) -> dict | None:
         "result_html": row[2],
         "generated_at": row[3],
         "source": row[4],
+        "signal_value": row[5],
+        "signal_score": row[6],
     }
 
 
@@ -96,7 +132,8 @@ def list_symbols() -> list[dict]:
     """종목별 row 만 (market != 'all') market·cache_key 순으로 반환."""
     with closing(_connect()) as conn:
         rows = conn.execute(
-            """SELECT cache_key, market, result_html, generated_at, source
+            """SELECT cache_key, market, result_html, generated_at, source,
+                      signal_value, signal_score
                FROM analysis_cache
                WHERE market != 'all'
                ORDER BY market, cache_key"""
@@ -108,6 +145,8 @@ def list_symbols() -> list[dict]:
             "result_html": r[2],
             "generated_at": r[3],
             "source": r[4],
+            "signal_value": r[5],
+            "signal_score": r[6],
         }
         for r in rows
     ]

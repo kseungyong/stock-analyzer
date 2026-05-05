@@ -266,7 +266,8 @@ class TestAnalyzeBgCachePut:
         def fake_generate_report(analyses):
             return "<p>fake report</p>"
 
-        def fake_put(cache_key, market, result_html, source):
+        def fake_put(cache_key, market, result_html, source, *,
+                     signal_value=None, signal_score=None):
             captured["cache_key"] = cache_key
             captured["market"] = market
             captured["result_html"] = result_html
@@ -1016,3 +1017,145 @@ class TestPredictionHistorySection:
         assert b"cached body unique" in resp.data
         # 섹션은 누락
         assert "예측 정확도".encode() not in resp.data
+
+
+class TestAnalyzeBgSavesSignal:
+    def test_run_analysis_bg_passes_signal_to_cache(self, client, monkeypatch):
+        import src.web_app as wa
+        from src import analysis_cache as ac
+
+        captured = {}
+
+        def fake_analyze_stock(symbol, name):
+            return {
+                "name": name, "symbol": symbol,
+                "df": None, "prediction": None, "news": [], "sentiment": None,
+                "signal": {"signal": "매수", "score": 3, "reasons": []},
+            }
+
+        def fake_generate_report(analyses):
+            return "<p>fake</p>"
+
+        def fake_put(cache_key, market, result_html, source, *,
+                     signal_value=None, signal_score=None):
+            captured["signal_value"] = signal_value
+            captured["signal_score"] = signal_score
+
+        monkeypatch.setattr("main.analyze_stock", fake_analyze_stock)
+        monkeypatch.setattr("src.report_generator.generate_report", fake_generate_report)
+        monkeypatch.setattr(ac, "put", fake_put)
+
+        wa._jobs.clear()
+        wa._jobs["jobsig1"] = {
+            "status": "running", "symbol": "AAPL", "name": "Apple",
+            "result_html": None, "error": None, "started_at": "00:00:00",
+        }
+        wa._run_analysis_bg("jobsig1", "AAPL", "Apple")
+
+        assert captured["signal_value"] == "매수"
+        assert captured["signal_score"] == 3
+
+
+class TestFullAnalysisSavesSignal:
+    def test_run_full_analysis_bg_passes_signal_per_symbol(self, client, monkeypatch):
+        """종목별 put 에 signal 전달, ALL put 은 signal 없이."""
+        import src.web_app as wa
+        from src import analysis_cache as ac
+
+        fake_analyses = [
+            {"symbol": "AAPL", "name": "Apple",
+             "signal": {"signal": "매수", "score": 3}},
+            {"symbol": "005930.KS", "name": "삼성전자",
+             "signal": {"signal": "매도", "score": -2}},
+        ]
+        fake_config = {"stocks": {
+            "us":    [{"symbol": "AAPL", "name": "Apple"}],
+            "korea": [{"symbol": "005930.KS", "name": "삼성전자"}],
+        }}
+        monkeypatch.setattr("main.collect_analyses", lambda cfg: fake_analyses)
+        monkeypatch.setattr("main.load_config", lambda: fake_config)
+        monkeypatch.setattr("src.report_generator.generate_report",
+                            lambda items: f"<p>{len(items)}</p>")
+
+        captured = []
+        monkeypatch.setattr(ac, "put",
+                            lambda *a, **k: captured.append((a, k)))
+
+        wa._jobs.clear()
+        wa._jobs["fsig1"] = {
+            "status": "running", "symbol": "ALL", "name": "전체 종목",
+            "result_html": None, "error": None, "started_at": "00:00:00",
+        }
+        wa._run_full_analysis_bg("fsig1")
+
+        # 종목별 put — signal kwargs 포함
+        symbol_calls = {c[0][0]: c[1] for c in captured if c[0][0] != "ALL"}
+        assert symbol_calls["AAPL"]["signal_value"] == "매수"
+        assert symbol_calls["AAPL"]["signal_score"] == 3
+        assert symbol_calls["005930.KS"]["signal_value"] == "매도"
+        assert symbol_calls["005930.KS"]["signal_score"] == -2
+        # ALL put — signal 없음
+        all_calls = [c[1] for c in captured if c[0][0] == "ALL"]
+        assert len(all_calls) == 1
+        assert all_calls[0].get("signal_value") is None
+        assert all_calls[0].get("signal_score") is None
+
+
+class TestRenderSignalBadge:
+    def test_none_value_returns_empty_string(self, client):
+        from src.web_app import _render_signal_badge
+        assert _render_signal_badge(None, None) == ""
+        assert _render_signal_badge(None, 5) == ""
+        assert _render_signal_badge("", 0) == ""
+
+    def test_buy_with_positive_score(self, client):
+        from src.web_app import _render_signal_badge
+        html = _render_signal_badge("매수", 3)
+        assert "signal-badge" in html
+        assert "signal-buy" in html
+        assert "매수 +3" in html
+
+    def test_sell_with_negative_score(self, client):
+        from src.web_app import _render_signal_badge
+        html = _render_signal_badge("매도", -2)
+        assert "signal-sell" in html
+        assert "매도 -2" in html
+
+    def test_hold_with_positive_score(self, client):
+        from src.web_app import _render_signal_badge
+        html = _render_signal_badge("관망", 1)
+        assert "signal-hold" in html
+        assert "관망 +1" in html
+
+    def test_score_zero_no_sign(self, client):
+        from src.web_app import _render_signal_badge
+        html = _render_signal_badge("관망", 0)
+        assert "관망 0" in html
+        assert "+0" not in html
+
+
+class TestIndexCardSignal:
+    def test_card_shows_signal_badge_when_cache_has_signal(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "auto_cron",
+               signal_value="매수", signal_score=3)
+        resp = client.get("/")
+        assert b"signal-badge" in resp.data
+        assert "매수 +3".encode() in resp.data
+
+    def test_card_no_signal_when_signal_value_null(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "auto_cron")
+        resp = client.get("/")
+        assert b"signal-badge" not in resp.data
+
+    def test_card_no_signal_when_no_cache_row(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        import sqlite3
+        with sqlite3.connect(ac._DB_PATH) as conn:
+            conn.execute("DELETE FROM analysis_cache WHERE cache_key = 'AAPL'")
+        resp = client.get("/")
+        assert b"signal-badge" not in resp.data

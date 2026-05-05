@@ -182,11 +182,14 @@ def auto_analyze_market(market: str) -> None:
                 logger.warning("자동분석 실패(결과 없음): %s", s["symbol"])
                 continue
             html = _rg.generate_report([result])
+            sig = result.get("signal") or {}
             analysis_cache.put(
                 cache_key=s["symbol"],
                 market=market,
                 result_html=html,
                 source="auto_cron",
+                signal_value=sig.get("signal"),
+                signal_score=sig.get("score"),
             )
             success += 1
         except Exception as e:

@@ -243,3 +243,86 @@ class TestIsFreshAll:
         now = _kst_unix(2026, 5, 5, 17, 0)
         all_row = {"market": "all", "generated_at": gen}
         assert ac.is_fresh(all_row, now) is False
+
+
+class TestMigrateAddsSignalColumns:
+    def test_new_db_has_signal_columns(self, tmp_db):
+        ac.init_db()
+        import sqlite3
+        with sqlite3.connect(tmp_db) as conn:
+            cur = conn.execute("PRAGMA table_info(analysis_cache)")
+            cols = {row[1] for row in cur.fetchall()}
+        assert "signal_value" in cols
+        assert "signal_score" in cols
+
+    def test_migrate_is_idempotent(self, tmp_db):
+        ac.init_db()
+        ac.init_db()  # 두 번째 호출도 오류 없음
+        import sqlite3
+        with sqlite3.connect(tmp_db) as conn:
+            cur = conn.execute("PRAGMA table_info(analysis_cache)")
+            names = [row[1] for row in cur.fetchall()]
+        assert names.count("signal_value") == 1
+        assert names.count("signal_score") == 1
+
+    def test_migrate_adds_columns_to_legacy_db(self, tmp_db):
+        """기존 (signal 컬럼 없는) DB 시뮬레이션 → _migrate 후 컬럼 존재 + row 보존."""
+        import sqlite3
+        legacy_schema = """
+        CREATE TABLE IF NOT EXISTS analysis_cache (
+            cache_key      TEXT PRIMARY KEY,
+            market         TEXT NOT NULL,
+            result_html    TEXT NOT NULL,
+            generated_at   INTEGER NOT NULL,
+            source         TEXT NOT NULL
+        );
+        """
+        tmp_db.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(tmp_db) as conn:
+            conn.executescript(legacy_schema)
+            conn.execute(
+                """INSERT INTO analysis_cache
+                   (cache_key, market, result_html, generated_at, source)
+                   VALUES ('AAPL', 'us', '<p/>', 1700000000, 'manual')"""
+            )
+        ac.init_db()
+        with sqlite3.connect(tmp_db) as conn:
+            cur = conn.execute("PRAGMA table_info(analysis_cache)")
+            cols = {row[1] for row in cur.fetchall()}
+            row = conn.execute("SELECT cache_key, signal_value FROM analysis_cache WHERE cache_key='AAPL'").fetchone()
+        assert "signal_value" in cols
+        assert "signal_score" in cols
+        assert row == ("AAPL", None)
+
+
+class TestPutGetSignal:
+    def test_put_with_signal_then_get(self, tmp_db):
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "manual",
+               signal_value="매수", signal_score=3)
+        row = ac.get("AAPL")
+        assert row["signal_value"] == "매수"
+        assert row["signal_score"] == 3
+
+    def test_put_default_signal_is_none(self, tmp_db):
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "manual")
+        row = ac.get("AAPL")
+        assert row["signal_value"] is None
+        assert row["signal_score"] is None
+
+    def test_put_signal_is_keyword_only(self, tmp_db):
+        ac.init_db()
+        with pytest.raises(TypeError):
+            ac.put("AAPL", "us", "<p/>", "manual", "매수", 3)
+
+    def test_upsert_overwrites_signal_with_none(self, tmp_db):
+        """signal 있던 row 를 signal 없이 UPSERT → NULL 로 덮어쓰기."""
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "manual",
+               signal_value="매수", signal_score=3)
+        ac.put("AAPL", "us", "<p>v2</p>", "manual")  # signal 없이
+        row = ac.get("AAPL")
+        assert row["result_html"] == "<p>v2</p>"
+        assert row["signal_value"] is None
+        assert row["signal_score"] is None

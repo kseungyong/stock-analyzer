@@ -201,7 +201,12 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
             _jobs_set(job_id, status="done", result_html=html)
             try:
                 market = _market_of(symbol)
-                analysis_cache.put(symbol, market, html, source="manual")
+                sig = result.get("signal") or {}
+                analysis_cache.put(
+                    symbol, market, html, source="manual",
+                    signal_value=sig.get("signal"),
+                    signal_score=sig.get("score"),
+                )
             except Exception as e:
                 logger.warning("analysis_cache.put 실패 (job 결과는 정상): %s", e)
             logger.info("분석 완료: job_id=%s symbol=%s", job_id, symbol)
@@ -259,8 +264,11 @@ def _run_full_analysis_bg(job_id: str) -> None:
             sym = r["symbol"]
             try:
                 ind_html = generate_report([r])
+                sig = r.get("signal") or {}
                 analysis_cache.put(
-                    sym, symbol_to_market.get(sym, "us"), ind_html, source="manual"
+                    sym, symbol_to_market.get(sym, "us"), ind_html, source="manual",
+                    signal_value=sig.get("signal"),
+                    signal_score=sig.get("score"),
                 )
                 cached += 1
             except Exception as e:
@@ -728,6 +736,31 @@ body {
 .mtab-radio:focus-visible ~ .mtab-list .mtab-label {
   outline: 2px solid var(--blue-500); outline-offset: 2px;
 }
+
+/* ── 카드 시그널 뱃지 ─────────────────────────────────────────────────── */
+.stock-card-badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.signal-buy,
+.signal-sell,
+.signal-hold {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.signal-buy  { background: var(--green-100); color: var(--green-600); }
+.signal-sell { background: var(--red-100);   color: var(--red-600); }
+.signal-hold { background: var(--slate-100); color: var(--slate-500); }
 """
 
 _AUTOCOMPLETE_JS = """
@@ -941,6 +974,33 @@ def _render_no_cache(symbol: str, name: str) -> str:
       <input type="hidden" name="return_to" value="stock">
       <button type="submit" class="btn btn-primary">▶ 분석 시작</button>
     </form>'''
+
+
+_SIGNAL_CLASS = {
+    "매수": "signal-buy",
+    "매도": "signal-sell",
+    "관망": "signal-hold",
+}
+
+
+def _render_signal_badge(value: str | None, score: int | None) -> str:
+    """시그널 뱃지 HTML — value 가 None/빈문자열이면 빈 문자열 반환.
+
+    score 양수는 ' +N', 음수는 자동 ' -N', 0 은 sign 없이 ' 0'.
+    예: ("매수", 3) → '<span class="signal-badge signal-buy">매수 +3</span>'
+    """
+    if not value:
+        return ""
+    cls = _SIGNAL_CLASS.get(value, "signal-hold")
+    if score is None:
+        score_part = ""
+    elif score > 0:
+        score_part = f" +{score}"
+    elif score < 0:
+        score_part = f" {score}"  # 음수 자동 '-'
+    else:
+        score_part = " 0"
+    return f'<span class="signal-badge {cls}">{value}{score_part}</span>'
 
 
 # ── 모델 설명 (정적) ──────────────────────────────────────────────────────
@@ -1307,6 +1367,10 @@ def index():
               <button type="submit" class="btn btn-amber btn-sm" title="재분석">🔄</button>
             </form>'''
 
+        signal_badge_html = _render_signal_badge(
+            cache_row.get("signal_value") if cache_row else None,
+            cache_row.get("signal_score") if cache_row else None,
+        )
         cards.append(f"""
         <div class="stock-card">
           <div class="stock-card-header">
@@ -1314,7 +1378,10 @@ def index():
               <h3>{escape(s['name'])}</h3>
               <div class="symbol">{escape(s['symbol'])}</div>
             </div>
-            <span class="badge {badge_cls}">{market_label}</span>
+            <div class="stock-card-badges">
+              {signal_badge_html}
+              <span class="badge {badge_cls}">{market_label}</span>
+            </div>
           </div>
           {freshness_line}
           <div class="stock-card-actions">

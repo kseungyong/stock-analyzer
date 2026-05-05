@@ -130,3 +130,34 @@ class TestDailyEmailJob:
         main.daily_email_job()
         assert len(sent) == 1
         assert "AAPL" in sent[0]
+
+
+class TestAutoAnalyzeMarketSavesSignal:
+    def test_signal_passed_to_cache_put(self, monkeypatch):
+        import main
+        from src import analysis_cache as ac
+
+        fake_config = {"stocks": {
+            "us": [{"symbol": "AAPL", "name": "Apple"}],
+        }, "schedule": {}, "email": {}}
+        monkeypatch.setattr(main, "load_config", lambda: fake_config)
+
+        def fake_analyze(symbol, name):
+            return {
+                "name": name, "symbol": symbol,
+                "df": None, "prediction": None, "news": [], "sentiment": None,
+                "signal": {"signal": "매수", "score": 4},
+            }
+
+        monkeypatch.setattr(main, "analyze_stock", fake_analyze)
+        monkeypatch.setattr("src.report_generator.generate_report",
+                            lambda a: "<p/>")
+
+        captured = []
+        monkeypatch.setattr(ac, "put", lambda **kw: captured.append(kw))
+
+        main.auto_analyze_market("us")
+
+        assert len(captured) == 1
+        assert captured[0]["signal_value"] == "매수"
+        assert captured[0]["signal_score"] == 4
