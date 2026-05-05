@@ -298,6 +298,12 @@ def get_backtest_results(backtest_id: str) -> dict:
     if not rows:
         return {"backtest_id": backtest_id, "summary": {}, "rows": []}
 
+    # 가정: 한 backtest_id는 단일 심볼만 포함. walk_forward는 종목별 1회 실행.
+    symbols_in_rows = {r[0] for r in rows}
+    if len(symbols_in_rows) > 1:
+        raise ValueError(
+            f"get_backtest_results: backtest_id={backtest_id!r}이 여러 심볼을 포함: {symbols_in_rows}"
+        )
     symbol = rows[0][0]
     summary = hit_rate_by_model(symbol, source="backtest", backtest_id=backtest_id)
     return {
