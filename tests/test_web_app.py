@@ -632,3 +632,44 @@ class TestParseBasicAuthUsers:
         monkeypatch.delenv("BASIC_AUTH_USERNAME", raising=False)
         monkeypatch.delenv("BASIC_AUTH_PASSWORD", raising=False)
         assert _parse_basic_auth_users() == {"good": "pw"}
+
+
+class TestLogout:
+    def test_logout_returns_401_with_logout_realm(self, client, monkeypatch):
+        """/logout 은 401 + realm='logout' + Clear-Site-Data 응답 (Basic Auth 캐시 무효화)."""
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
+        from base64 import b64encode
+        creds = b64encode(b"admin:secret").decode()
+        resp = client.get("/logout", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == 'Basic realm="logout"'
+        assert resp.headers.get("Clear-Site-Data") == '"*"'
+        assert "로그아웃".encode() in resp.data
+
+    def test_logout_bypasses_auth_gate(self, client, monkeypatch):
+        """/logout 은 인증 안 된 사용자도 접근 가능 (안내 페이지 보여줌)."""
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
+        # 자격 없이 /logout 접근 — gate 가 우회 → 라우트 자체가 401 응답
+        resp = client.get("/logout")
+        assert resp.status_code == 401
+        assert "로그아웃".encode() in resp.data  # 안내 본문 도달함
+
+    def test_logout_link_in_topbar_when_auth_enabled(self, client, monkeypatch):
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
+        from base64 import b64encode
+        creds = b64encode(b"admin:secret").decode()
+        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert b'href="/logout"' in resp.data
+        assert "로그아웃".encode() in resp.data
+
+    def test_no_logout_link_when_auth_disabled(self, client, monkeypatch):
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", False)
+        resp = client.get("/")
+        assert b'href="/logout"' not in resp.data

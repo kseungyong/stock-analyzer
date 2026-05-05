@@ -86,8 +86,13 @@ if _basic_auth_on and not _basic_auth_users:
 
 @app.before_request
 def _basic_auth_gate():
-    """ENABLE_BASIC_AUTH=1 일 때 모든 요청에 Basic Auth 검증."""
+    """ENABLE_BASIC_AUTH=1 일 때 모든 요청에 Basic Auth 검증.
+
+    /logout 만 우회 — 라우트 자체가 401 + Clear-Site-Data 로 캐시 무효화한다.
+    """
     if not _basic_auth_on:
+        return None
+    if request.path == "/logout":
         return None
     auth = request.authorization
     if auth is not None:
@@ -779,6 +784,10 @@ _ICON_LIST  = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" vi
 
 
 def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
+    logout_link = (
+        '<a class="topbar-link" href="/logout" style="opacity:0.75;">로그아웃</a>'
+        if _basic_auth_on else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -796,6 +805,7 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
   <div class="topbar-nav">
     <a class="topbar-link" href="/">대시보드</a>
     <a class="topbar-link" href="/jobs">작업 내역</a>
+    {logout_link}
   </div>
 </nav>
 <main class="main">
@@ -903,6 +913,49 @@ def _render_stock_with_overlay(symbol: str, name: str, row: dict | None, job_id:
 # ---------------------------------------------------------------------------
 # routes
 # ---------------------------------------------------------------------------
+
+@app.route("/logout")
+def logout():
+    """Basic Auth 로그아웃 — 401 + Clear-Site-Data 로 브라우저 자격 캐시 무효화 시도.
+
+    Basic Auth 는 stateless 라 진짜 server-side logout 은 불가능.
+    realm 을 평소 'stock-analyzer' 와 다른 'logout' 으로 응답해 일부 브라우저가
+    자격 캐시를 invalidate 하도록 유도. Chrome/Firefox 는 Clear-Site-Data 도 인식.
+    Safari 등은 탭 닫기까지 자격이 유지될 수 있음 (브라우저 한계).
+    """
+    body = """<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<title>로그아웃 — Stock Analyzer</title>
+<style>
+body{font-family:-apple-system,'Fira Sans',sans-serif;background:#F8FAFC;color:#0F172A;
+     min-height:100vh;display:flex;align-items:center;justify-content:center;}
+.card{background:#fff;padding:48px 56px;border-radius:12px;
+      box-shadow:0 4px 6px rgba(0,0,0,0.07);text-align:center;max-width:420px;}
+h1{color:#1E3A8A;font-size:1.4rem;margin-bottom:12px;}
+p{color:#64748B;margin:8px 0;line-height:1.6;}
+a{display:inline-block;margin-top:20px;color:#2563EB;text-decoration:none;
+  border:1.5px solid #2563EB;padding:8px 20px;border-radius:7px;font-weight:600;}
+a:hover{background:#EFF6FF;}
+</style></head><body>
+<div class="card">
+  <h1>로그아웃되었습니다</h1>
+  <p>다른 사용자로 로그인하려면 아래 버튼을 누르세요.</p>
+  <p style="font-size:0.82rem;color:#94A3B8;">
+    일부 브라우저는 탭을 닫아야 자격이 완전히 사라집니다.
+  </p>
+  <a href="/">다시 로그인</a>
+</div>
+</body></html>"""
+    return Response(
+        body,
+        401,
+        {
+            "WWW-Authenticate": 'Basic realm="logout"',
+            "Clear-Site-Data": '"*"',
+            "Content-Type": "text/html; charset=utf-8",
+        },
+    )
+
 
 @app.route("/")
 def index():
