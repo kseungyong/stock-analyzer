@@ -549,8 +549,7 @@ class TestBasicAuthGate:
     def test_returns_401_without_auth_when_enabled(self, client, monkeypatch):
         import src.web_app as wa
         monkeypatch.setattr(wa, "_basic_auth_on", True)
-        monkeypatch.setattr(wa, "_basic_auth_user", "admin")
-        monkeypatch.setattr(wa, "_basic_auth_pass", "secret")
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
         resp = client.get("/")
         assert resp.status_code == 401
         assert "WWW-Authenticate" in resp.headers
@@ -560,8 +559,7 @@ class TestBasicAuthGate:
         import src.web_app as wa
         from base64 import b64encode
         monkeypatch.setattr(wa, "_basic_auth_on", True)
-        monkeypatch.setattr(wa, "_basic_auth_user", "admin")
-        monkeypatch.setattr(wa, "_basic_auth_pass", "secret")
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
         creds = b64encode(b"admin:wrong").decode()
         resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
         assert resp.status_code == 401
@@ -570,8 +568,67 @@ class TestBasicAuthGate:
         import src.web_app as wa
         from base64 import b64encode
         monkeypatch.setattr(wa, "_basic_auth_on", True)
-        monkeypatch.setattr(wa, "_basic_auth_user", "admin")
-        monkeypatch.setattr(wa, "_basic_auth_pass", "secret")
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
         creds = b64encode(b"admin:secret").decode()
         resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
         assert resp.status_code == 200
+
+    def test_multi_users_each_authenticate_independently(self, client, monkeypatch):
+        """여러 사용자 — 각자 자기 비밀번호로 통과, 다른 사람 비밀번호는 실패."""
+        import src.web_app as wa
+        from base64 import b64encode
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_users", {
+            "admin": "pw1", "sykim": "pw2", "guest": "pw3",
+        })
+        # 각 사용자 자기 비번 → 200
+        for user, pw in [("admin", "pw1"), ("sykim", "pw2"), ("guest", "pw3")]:
+            creds = b64encode(f"{user}:{pw}".encode()).decode()
+            resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+            assert resp.status_code == 200, f"{user} 인증 실패"
+        # admin 이 sykim 비번 사용 → 401
+        creds = b64encode(b"admin:pw2").decode()
+        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 401
+        # 모르는 사용자 → 401
+        creds = b64encode(b"unknown:any").decode()
+        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 401
+
+
+class TestParseBasicAuthUsers:
+    def test_multi_format(self, monkeypatch):
+        from src.web_app import _parse_basic_auth_users
+        monkeypatch.setenv("BASIC_AUTH_USERS", "admin:pw1;sykim:pw2;guest:pw3")
+        monkeypatch.delenv("BASIC_AUTH_USERNAME", raising=False)
+        monkeypatch.delenv("BASIC_AUTH_PASSWORD", raising=False)
+        assert _parse_basic_auth_users() == {
+            "admin": "pw1", "sykim": "pw2", "guest": "pw3",
+        }
+
+    def test_password_can_contain_colon(self, monkeypatch):
+        from src.web_app import _parse_basic_auth_users
+        monkeypatch.setenv("BASIC_AUTH_USERS", "admin:p:w:1;sykim:pw2")
+        users = _parse_basic_auth_users()
+        assert users["admin"] == "p:w:1"
+        assert users["sykim"] == "pw2"
+
+    def test_legacy_single_user_fallback(self, monkeypatch):
+        from src.web_app import _parse_basic_auth_users
+        monkeypatch.delenv("BASIC_AUTH_USERS", raising=False)
+        monkeypatch.setenv("BASIC_AUTH_USERNAME", "admin")
+        monkeypatch.setenv("BASIC_AUTH_PASSWORD", "secret")
+        assert _parse_basic_auth_users() == {"admin": "secret"}
+
+    def test_empty_returns_empty_dict(self, monkeypatch):
+        from src.web_app import _parse_basic_auth_users
+        for k in ("BASIC_AUTH_USERS", "BASIC_AUTH_USERNAME", "BASIC_AUTH_PASSWORD"):
+            monkeypatch.delenv(k, raising=False)
+        assert _parse_basic_auth_users() == {}
+
+    def test_malformed_entries_skipped(self, monkeypatch):
+        from src.web_app import _parse_basic_auth_users
+        monkeypatch.setenv("BASIC_AUTH_USERS", "good:pw;malformed_no_colon;:nopwuser")
+        monkeypatch.delenv("BASIC_AUTH_USERNAME", raising=False)
+        monkeypatch.delenv("BASIC_AUTH_PASSWORD", raising=False)
+        assert _parse_basic_auth_users() == {"good": "pw"}

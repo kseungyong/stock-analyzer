@@ -48,13 +48,39 @@ if not _secret_key:
 app.secret_key = _secret_key
 
 # Basic Auth — 인터넷 노출 시 (예: Tailscale Funnel) 인증 게이트.
-# ENABLE_BASIC_AUTH=1 일 때 USERNAME/PASSWORD 둘 다 필요. 미설정 시 인증 우회 (로컬 개발).
+# ENABLE_BASIC_AUTH=1 일 때 BASIC_AUTH_USERS 또는 단일 USERNAME/PASSWORD 중 하나 필요.
+def _parse_basic_auth_users() -> dict[str, str]:
+    """환경변수에서 사용자 dict 를 빌드한다.
+
+    BASIC_AUTH_USERS=user1:pw1;user2:pw2;user3:pw3 형식 우선.
+    없으면 BASIC_AUTH_USERNAME/BASIC_AUTH_PASSWORD 단일 쌍 사용 (호환).
+    비밀번호에 ':' 포함 가능 (split 한 번만).
+    """
+    users: dict[str, str] = {}
+    multi = os.environ.get("BASIC_AUTH_USERS", "").strip()
+    if multi:
+        for entry in multi.split(";"):
+            entry = entry.strip()
+            if ":" not in entry:
+                continue
+            u, p = entry.split(":", 1)
+            u = u.strip()
+            if u and p:
+                users[u] = p
+    else:
+        u = os.environ.get("BASIC_AUTH_USERNAME", "").strip()
+        p = os.environ.get("BASIC_AUTH_PASSWORD", "")
+        if u and p:
+            users[u] = p
+    return users
+
+
 _basic_auth_on = os.environ.get("ENABLE_BASIC_AUTH", "").strip().lower() in ("1", "true", "yes")
-_basic_auth_user = os.environ.get("BASIC_AUTH_USERNAME", "")
-_basic_auth_pass = os.environ.get("BASIC_AUTH_PASSWORD", "")
-if _basic_auth_on and (not _basic_auth_user or not _basic_auth_pass):
+_basic_auth_users = _parse_basic_auth_users()
+if _basic_auth_on and not _basic_auth_users:
     raise RuntimeError(
-        "ENABLE_BASIC_AUTH=1 인 경우 BASIC_AUTH_USERNAME 과 BASIC_AUTH_PASSWORD 가 모두 필요합니다."
+        "ENABLE_BASIC_AUTH=1 인 경우 BASIC_AUTH_USERS 또는 "
+        "BASIC_AUTH_USERNAME/BASIC_AUTH_PASSWORD 중 하나는 채워야 합니다."
     )
 
 
@@ -64,12 +90,10 @@ def _basic_auth_gate():
     if not _basic_auth_on:
         return None
     auth = request.authorization
-    if (
-        auth is not None
-        and auth.username == _basic_auth_user
-        and secrets.compare_digest(auth.password or "", _basic_auth_pass)
-    ):
-        return None
+    if auth is not None:
+        expected = _basic_auth_users.get(auth.username)
+        if expected is not None and secrets.compare_digest(auth.password or "", expected):
+            return None
     return Response(
         "Authentication required",
         401,
