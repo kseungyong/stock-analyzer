@@ -20,7 +20,7 @@ except ImportError:
 
 import pandas as pd
 from src.data_fetcher import fetch_stock_data, fetch_multiple, fetch_news
-from src.technical_analysis import compute_indicators, generate_signal
+from src.technical_analysis import compute_indicators, generate_signal, generate_bnf_signal, fetch_market_df
 from src.prediction_engine import PredictionEngine
 from src.report_generator import generate_report
 from src.email_sender import send_report
@@ -69,12 +69,13 @@ def get_all_stocks(config: dict) -> list[dict]:
     return stocks
 
 
-def analyze_stock(symbol: str, name: str) -> dict | None:
+def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | None:
     """단일 종목 분석을 수행한다.
 
     Args:
         symbol: 주식 심볼 (예: AAPL, 005930.KS)
         name: 종목명
+        market: 'korea' 또는 'us'. None 이면 BNF 시그널은 시장 통합 없이 종목 단독.
 
     Returns:
         분석 결과 딕셔너리 또는 실패 시 None
@@ -96,6 +97,14 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
             logger.warning("backfill_inline 실패 (분석은 계속): %s", e)
 
         signal = generate_signal(df)
+
+        # BNF 시그널 — 실패해도 분석 본체에 영향 없음
+        bnf_signal = None
+        try:
+            market_df = fetch_market_df(market) if market else None
+            bnf_signal = generate_bnf_signal(df, market_df=market_df)
+        except Exception as e:
+            logger.warning("generate_bnf_signal 실패 (분석은 계속): %s", e)
 
         from src.ml_predictor import analyze_sentiment
         # ML 예측과 뉴스 수집을 동시에 실행
@@ -120,6 +129,7 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
             "symbol": symbol,
             "df": df,
             "signal": signal,
+            "bnf_signal": bnf_signal,
             "prediction": prediction,
             "news": news,
             "sentiment": sentiment,
@@ -134,19 +144,23 @@ def collect_analyses(config: dict) -> list[dict]:
 
     실패한 종목은 결과에서 제외된다 (logger.warning 으로 표시됨).
     """
-    stocks = get_all_stocks(config)
-    logger.info("분석 시작: %d개 종목", len(stocks))
+    # market 별로 종목 모음 → (symbol, name, market) 튜플
+    stocks_with_market: list[tuple] = []
+    for market, group in config.get("stocks", {}).items():
+        for s in group:
+            stocks_with_market.append((s["symbol"], s["name"], market))
+    logger.info("분석 시작: %d개 종목", len(stocks_with_market))
 
     analyses: list[dict] = []
-    max_workers = min(len(stocks), 3)
+    max_workers = min(len(stocks_with_market), 3)
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         future_to_stock = {
-            ex.submit(analyze_stock, s["symbol"], s["name"]): s
-            for s in stocks
+            ex.submit(analyze_stock, sym, nm, mk): (sym, nm)
+            for (sym, nm, mk) in stocks_with_market
         }
         for future in as_completed(future_to_stock):
-            s = future_to_stock[future]
-            logger.info("분석 중: %s (%s)", s["name"], s["symbol"])
+            sym, nm = future_to_stock[future]
+            logger.info("분석 중: %s (%s)", nm, sym)
             result = future.result()
             if result:
                 analyses.append(result)
@@ -177,12 +191,13 @@ def auto_analyze_market(market: str) -> None:
     success = 0
     for s in stocks:
         try:
-            result = analyze_stock(s["symbol"], s["name"])
+            result = analyze_stock(s["symbol"], s["name"], market=market)
             if result is None:
                 logger.warning("자동분석 실패(결과 없음): %s", s["symbol"])
                 continue
             html = _rg.generate_report([result])
             sig = result.get("signal") or {}
+            bnf = result.get("bnf_signal") or {}
             analysis_cache.put(
                 cache_key=s["symbol"],
                 market=market,
@@ -190,6 +205,8 @@ def auto_analyze_market(market: str) -> None:
                 source="auto_cron",
                 signal_value=sig.get("signal"),
                 signal_score=sig.get("score"),
+                bnf_signal_value=bnf.get("signal"),
+                bnf_signal_score=bnf.get("score"),
             )
             success += 1
         except Exception as e:

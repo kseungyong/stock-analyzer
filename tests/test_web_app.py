@@ -259,7 +259,7 @@ class TestAnalyzeBgCachePut:
 
         captured = {}
 
-        def fake_analyze_stock(symbol, name):
+        def fake_analyze_stock(symbol, name, market=None):
             return {"name": name, "symbol": symbol, "df": None,
                     "signal": None, "prediction": None, "news": [], "sentiment": None}
 
@@ -267,7 +267,8 @@ class TestAnalyzeBgCachePut:
             return "<p>fake report</p>"
 
         def fake_put(cache_key, market, result_html, source, *,
-                     signal_value=None, signal_score=None):
+                     signal_value=None, signal_score=None,
+                     bnf_signal_value=None, bnf_signal_score=None):
             captured["cache_key"] = cache_key
             captured["market"] = market
             captured["result_html"] = result_html
@@ -298,7 +299,7 @@ class TestAnalyzeBgCachePut:
 
         called = {"put": False}
         monkeypatch.setattr(ac, "put", lambda *a, **k: called.__setitem__("put", True))
-        monkeypatch.setattr("main.analyze_stock", lambda s, n: None)
+        monkeypatch.setattr("main.analyze_stock", lambda s, n, market=None: None)
 
         wa._jobs.clear()
         wa._jobs["job2"] = {
@@ -1026,7 +1027,7 @@ class TestAnalyzeBgSavesSignal:
 
         captured = {}
 
-        def fake_analyze_stock(symbol, name):
+        def fake_analyze_stock(symbol, name, market=None):
             return {
                 "name": name, "symbol": symbol,
                 "df": None, "prediction": None, "news": [], "sentiment": None,
@@ -1037,7 +1038,8 @@ class TestAnalyzeBgSavesSignal:
             return "<p>fake</p>"
 
         def fake_put(cache_key, market, result_html, source, *,
-                     signal_value=None, signal_score=None):
+                     signal_value=None, signal_score=None,
+                     bnf_signal_value=None, bnf_signal_score=None):
             captured["signal_value"] = signal_value
             captured["signal_score"] = signal_score
 
@@ -1159,3 +1161,83 @@ class TestIndexCardSignal:
             conn.execute("DELETE FROM analysis_cache WHERE cache_key = 'AAPL'")
         resp = client.get("/")
         assert b"signal-badge" not in resp.data
+
+
+class TestWorkerBnfSignal:
+    def test_run_analysis_bg_passes_bnf_signal_to_cache(self, client, monkeypatch):
+        import src.web_app as wa
+        from src import analysis_cache as ac
+
+        captured = {}
+
+        def fake_analyze_stock(symbol, name, market=None):
+            return {
+                "name": name, "symbol": symbol,
+                "df": None, "prediction": None, "news": [], "sentiment": None,
+                "signal": {"signal": "매수", "score": 3},
+                "bnf_signal": {"signal": "매도", "score": -2},
+            }
+
+        monkeypatch.setattr("main.analyze_stock", fake_analyze_stock)
+        monkeypatch.setattr("src.report_generator.generate_report", lambda a: "<p/>")
+
+        def fake_put(*a, **k):
+            captured.update(k)
+
+        monkeypatch.setattr(ac, "put", fake_put)
+
+        wa._jobs.clear()
+        wa._jobs["jobbnf1"] = {
+            "status": "running", "symbol": "AAPL", "name": "Apple",
+            "result_html": None, "error": None, "started_at": "00:00:00",
+        }
+        wa._run_analysis_bg("jobbnf1", "AAPL", "Apple")
+
+        assert captured["signal_value"] == "매수"
+        assert captured["signal_score"] == 3
+        assert captured["bnf_signal_value"] == "매도"
+        assert captured["bnf_signal_score"] == -2
+
+
+class TestRenderSignalBadgeBnfPrefix:
+    def test_prefix_bnf(self, client):
+        from src.web_app import _render_signal_badge
+        html = _render_signal_badge("매수", 3, prefix="BNF ")
+        assert "BNF 매수 +3" in html
+        assert "signal-buy" in html
+
+    def test_default_prefix_unchanged(self, client):
+        from src.web_app import _render_signal_badge
+        html = _render_signal_badge("매도", -2)
+        assert "매도 -2" in html
+        assert "BNF" not in html
+
+
+class TestIndexCardBnfBadge:
+    def test_card_shows_bnf_badge(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "auto_cron",
+               signal_value="매수", signal_score=3,
+               bnf_signal_value="매도", bnf_signal_score=-2)
+        resp = client.get("/")
+        assert "매수 +3".encode() in resp.data
+        assert "BNF 매도 -2".encode() in resp.data
+
+    def test_card_no_bnf_badge_when_null(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        ac.put("AAPL", "us", "<p/>", "auto_cron",
+               signal_value="매수", signal_score=3)  # bnf 없이
+        resp = client.get("/")
+        assert "매수 +3".encode() in resp.data
+        assert b"BNF " not in resp.data
+
+    def test_card_no_badges_when_no_cache_row(self, client):
+        from src import analysis_cache as ac
+        ac.init_db()
+        import sqlite3
+        with sqlite3.connect(ac._DB_PATH) as conn:
+            conn.execute("DELETE FROM analysis_cache WHERE cache_key = 'AAPL'")
+        resp = client.get("/")
+        assert b"BNF " not in resp.data

@@ -192,7 +192,8 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
         from main import analyze_stock
         from src.report_generator import generate_report
 
-        result = analyze_stock(symbol, name)
+        market = _market_of(symbol)
+        result = analyze_stock(symbol, name, market=market)
         if result is None:
             logger.warning("분석 결과 없음: job_id=%s symbol=%s", job_id, symbol)
             _jobs_set(job_id, status="error", error=f'"{symbol}" 분석 중 오류 발생')
@@ -200,12 +201,14 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
             html = generate_report([result])
             _jobs_set(job_id, status="done", result_html=html)
             try:
-                market = _market_of(symbol)
                 sig = result.get("signal") or {}
+                bnf = result.get("bnf_signal") or {}
                 analysis_cache.put(
                     symbol, market, html, source="manual",
                     signal_value=sig.get("signal"),
                     signal_score=sig.get("score"),
+                    bnf_signal_value=bnf.get("signal"),
+                    bnf_signal_score=bnf.get("score"),
                 )
             except Exception as e:
                 logger.warning("analysis_cache.put 실패 (job 결과는 정상): %s", e)
@@ -265,10 +268,13 @@ def _run_full_analysis_bg(job_id: str) -> None:
             try:
                 ind_html = generate_report([r])
                 sig = r.get("signal") or {}
+                bnf = r.get("bnf_signal") or {}
                 analysis_cache.put(
                     sym, symbol_to_market.get(sym, "us"), ind_html, source="manual",
                     signal_value=sig.get("signal"),
                     signal_score=sig.get("score"),
+                    bnf_signal_value=bnf.get("signal"),
+                    bnf_signal_score=bnf.get("score"),
                 )
                 cached += 1
             except Exception as e:
@@ -983,11 +989,15 @@ _SIGNAL_CLASS = {
 }
 
 
-def _render_signal_badge(value: str | None, score: int | None) -> str:
+def _render_signal_badge(
+    value: str | None,
+    score: int | None,
+    prefix: str = "",
+) -> str:
     """시그널 뱃지 HTML — value 가 None/빈문자열이면 빈 문자열 반환.
 
     score 양수는 ' +N', 음수는 자동 ' -N', 0 은 sign 없이 ' 0'.
-    예: ("매수", 3) → '<span class="signal-badge signal-buy">매수 +3</span>'
+    prefix 가 있으면 라벨 앞에 붙음 (예: 'BNF 매수 +3').
     """
     if not value:
         return ""
@@ -997,10 +1007,11 @@ def _render_signal_badge(value: str | None, score: int | None) -> str:
     elif score > 0:
         score_part = f" +{score}"
     elif score < 0:
-        score_part = f" {score}"  # 음수 자동 '-'
+        score_part = f" {score}"
     else:
         score_part = " 0"
-    return f'<span class="signal-badge {cls}">{value}{score_part}</span>'
+    label = f"{prefix}{value}" if prefix else value
+    return f'<span class="signal-badge {cls}">{label}{score_part}</span>'
 
 
 # ── 모델 설명 (정적) ──────────────────────────────────────────────────────
@@ -1371,6 +1382,11 @@ def index():
             cache_row.get("signal_value") if cache_row else None,
             cache_row.get("signal_score") if cache_row else None,
         )
+        bnf_badge_html = _render_signal_badge(
+            cache_row.get("bnf_signal_value") if cache_row else None,
+            cache_row.get("bnf_signal_score") if cache_row else None,
+            prefix="BNF ",
+        )
         cards.append(f"""
         <div class="stock-card">
           <div class="stock-card-header">
@@ -1380,6 +1396,7 @@ def index():
             </div>
             <div class="stock-card-badges">
               {signal_badge_html}
+              {bnf_badge_html}
               <span class="badge {badge_cls}">{market_label}</span>
             </div>
           </div>

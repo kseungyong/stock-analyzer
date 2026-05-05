@@ -21,13 +21,15 @@ _ONE_DAY = timedelta(days=1)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS analysis_cache (
-    cache_key      TEXT PRIMARY KEY,
-    market         TEXT NOT NULL,
-    result_html    TEXT NOT NULL,
-    generated_at   INTEGER NOT NULL,
-    source         TEXT NOT NULL,
-    signal_value   TEXT,
-    signal_score   INTEGER
+    cache_key         TEXT PRIMARY KEY,
+    market            TEXT NOT NULL,
+    result_html       TEXT NOT NULL,
+    generated_at      INTEGER NOT NULL,
+    source            TEXT NOT NULL,
+    signal_value      TEXT,
+    signal_score      INTEGER,
+    bnf_signal_value  TEXT,
+    bnf_signal_score  INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_cache_market
@@ -64,6 +66,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE analysis_cache ADD COLUMN signal_value TEXT")
     if "signal_score" not in cols:
         conn.execute("ALTER TABLE analysis_cache ADD COLUMN signal_score INTEGER")
+    if "bnf_signal_value" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN bnf_signal_value TEXT")
+    if "bnf_signal_score" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN bnf_signal_score INTEGER")
 
 
 def put(
@@ -74,11 +80,12 @@ def put(
     *,
     signal_value: str | None = None,
     signal_score: int | None = None,
+    bnf_signal_value: str | None = None,
+    bnf_signal_score: int | None = None,
 ) -> None:
     """analysis_cache UPSERT. 같은 cache_key 존재 시 덮어쓴다.
 
-    signal_value/signal_score 가 None 이면 NULL 저장 — UPSERT 시 기존 값을 NULL 로
-    덮어쓰는 효과 (호출자가 명시적으로 전달해야 보존).
+    signal/bnf_signal 매개변수 None 이면 NULL 저장 (UPSERT 시 기존 값을 NULL 로 덮어쓰는 효과).
     """
     now_unix = int(time.time())
     with _writer_lock:
@@ -88,17 +95,21 @@ def put(
                 conn.execute(
                     """INSERT INTO analysis_cache
                        (cache_key, market, result_html, generated_at, source,
-                        signal_value, signal_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)
+                        signal_value, signal_score,
+                        bnf_signal_value, bnf_signal_score)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(cache_key) DO UPDATE SET
-                         market       = excluded.market,
-                         result_html  = excluded.result_html,
-                         generated_at = excluded.generated_at,
-                         source       = excluded.source,
-                         signal_value = excluded.signal_value,
-                         signal_score = excluded.signal_score""",
+                         market           = excluded.market,
+                         result_html      = excluded.result_html,
+                         generated_at     = excluded.generated_at,
+                         source           = excluded.source,
+                         signal_value     = excluded.signal_value,
+                         signal_score     = excluded.signal_score,
+                         bnf_signal_value = excluded.bnf_signal_value,
+                         bnf_signal_score = excluded.bnf_signal_score""",
                     (cache_key, market, result_html, now_unix, source,
-                     signal_value, signal_score),
+                     signal_value, signal_score,
+                     bnf_signal_value, bnf_signal_score),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -111,7 +122,8 @@ def get(cache_key: str) -> dict | None:
     with closing(_connect()) as conn:
         row = conn.execute(
             """SELECT cache_key, market, result_html, generated_at, source,
-                      signal_value, signal_score
+                      signal_value, signal_score,
+                      bnf_signal_value, bnf_signal_score
                FROM analysis_cache WHERE cache_key = ?""",
             (cache_key,),
         ).fetchone()
@@ -125,6 +137,8 @@ def get(cache_key: str) -> dict | None:
         "source": row[4],
         "signal_value": row[5],
         "signal_score": row[6],
+        "bnf_signal_value": row[7],
+        "bnf_signal_score": row[8],
     }
 
 
@@ -133,7 +147,8 @@ def list_symbols() -> list[dict]:
     with closing(_connect()) as conn:
         rows = conn.execute(
             """SELECT cache_key, market, result_html, generated_at, source,
-                      signal_value, signal_score
+                      signal_value, signal_score,
+                      bnf_signal_value, bnf_signal_score
                FROM analysis_cache
                WHERE market != 'all'
                ORDER BY market, cache_key"""
@@ -147,6 +162,8 @@ def list_symbols() -> list[dict]:
             "source": r[4],
             "signal_value": r[5],
             "signal_score": r[6],
+            "bnf_signal_value": r[7],
+            "bnf_signal_score": r[8],
         }
         for r in rows
     ]

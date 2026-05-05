@@ -1,5 +1,46 @@
+import logging
+import time
+
 import pandas as pd
 import ta
+
+logger = logging.getLogger(__name__)
+
+
+_MARKET_INDEX = {
+    "korea": "^KS11",   # KOSPI
+    "us":    "^GSPC",   # S&P 500
+}
+
+_market_cache: dict = {}  # {index: (df, cached_at_unix)}
+_MARKET_CACHE_TTL = 15 * 60  # 15분
+
+
+def fetch_market_df(market: str):
+    """시장 인덱스 데이터 fetch + 15분 TTL 메모리 캐시.
+
+    market: "korea" 또는 "us". 그 외/None/fetch 실패 시 None.
+
+    Returns: pd.DataFrame | None
+    """
+    index = _MARKET_INDEX.get(market)
+    if not index:
+        return None
+    cached = _market_cache.get(index)
+    if cached and (time.time() - cached[1] < _MARKET_CACHE_TTL):
+        return cached[0]
+    try:
+        # 함수 안 import 로 순환 의존 회피
+        from src.data_fetcher import fetch_stock_data as _fetch
+        df = _fetch(index)
+        df = compute_indicators(df)
+        _market_cache[index] = (df, time.time())
+        return df
+    except Exception as e:
+        logger.warning("시장 데이터 fetch 실패 (%s): %s", index, e)
+        # stale 데이터 정리
+        _market_cache.pop(index, None)
+        return None
 
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -185,4 +226,128 @@ def generate_signal(df: pd.DataFrame) -> dict:
         "rsi": round(rsi_val, 1),
         "macd_hist": round(hist, 4),
         "close": round(close, 2),
+    }
+
+
+def generate_bnf_signal(df: pd.DataFrame, market_df=None) -> dict:
+    """BNF 스타일 매수/매도/관망 시그널 — mean reversion + 시장 패닉 매수.
+
+    점수 항목:
+    - MA20 이격율: <= -10% +2, <= -5% +1, >= +7% -1, >= +10% -2
+    - RSI: <= 30 +1, >= 70 -1
+    - 거래량 ≥2배 + 음봉: +1 (BNF 는 추격 매수 안 함, 양봉은 0)
+    - 시장 이격율 (market_df 있을 때): 시장<=-3% AND 종목<=-10% → +1,
+                                          시장>=+5% AND 종목>=+7% → -1
+
+    임계값: score >= 2 매수, <= -2 매도, 그 외 관망.
+
+    Args:
+        df: 종목 OHLCV + 기술지표 (compute_indicators 적용 완료)
+        market_df: 시장 인덱스 OHLCV + 기술지표 (None 이면 시장 점수 항목 0)
+
+    Returns:
+        {
+            "signal": "매수"|"매도"|"관망",
+            "score": int,
+            "reasons": [...],
+            "indicators": [...],
+            "disparity": float,  # 종목 MA20 이격율 %
+            "market_disparity": float | None,  # 시장 이격율 %
+        }
+    """
+    latest = df.iloc[-1]
+    score = 0
+    reasons: list[str] = []
+    indicators: list[dict] = []
+
+    close = float(latest["Close"])
+    ma20 = float(latest["MA20"])
+    disparity = (close - ma20) / ma20 * 100 if pd.notna(ma20) and ma20 != 0 else 0.0
+
+    # 1) MA20 이격율
+    if disparity <= -10:
+        score += 2
+        reasons.append(f"MA20 {disparity:.1f}% 강한 과매도")
+        d_comment = "강한 과매도 — 평균회귀 반발 매수 후보"
+    elif disparity <= -5:
+        score += 1
+        reasons.append(f"MA20 {disparity:.1f}% 과매도")
+        d_comment = "과매도 — 반발 가능성"
+    elif disparity >= 10:
+        score -= 2
+        reasons.append(f"MA20 +{disparity:.1f}% 강한 과열")
+        d_comment = "강한 과열 — 평균회귀 매도 후보"
+    elif disparity >= 7:
+        score -= 1
+        reasons.append(f"MA20 +{disparity:.1f}% 과열")
+        d_comment = "과열 — 조정 가능성"
+    else:
+        d_comment = "이격 적정 범위"
+    indicators.append({
+        "name": "MA20 이격율", "value": f"{disparity:.1f}%", "comment": d_comment,
+    })
+
+    # 2) RSI
+    rsi_val = float(latest["RSI"]) if pd.notna(latest.get("RSI")) else 50.0
+    if rsi_val <= 30:
+        score += 1
+        reasons.append(f"RSI {rsi_val:.0f} 과매도")
+    elif rsi_val >= 70:
+        score -= 1
+        reasons.append(f"RSI {rsi_val:.0f} 과매수")
+    indicators.append({"name": "RSI", "value": round(rsi_val, 1), "comment": "BNF 보조"})
+
+    # 3) 거래량 + 음봉 (양봉은 0)
+    vol_ratio = float(latest.get("Volume_Ratio", 1.0)) if pd.notna(latest.get("Volume_Ratio")) else 1.0
+    open_val = float(latest["Open"])
+    is_red = close < open_val
+    if vol_ratio >= 2.0 and is_red:
+        score += 1
+        reasons.append(f"거래량 {vol_ratio:.1f}배 음봉 — 패닉 매도 후 반발 가능")
+        v_comment = f"급증 음봉 — 반발 매수 후보 ({vol_ratio:.1f}배)"
+    elif vol_ratio >= 2.0:
+        v_comment = f"급증 양봉 — BNF 는 추격 매수 안 함 ({vol_ratio:.1f}배)"
+    else:
+        v_comment = f"평이 ({vol_ratio:.1f}배)"
+    indicators.append({"name": "거래량+캔들", "value": f"{vol_ratio:.1f}배",
+                        "comment": v_comment})
+
+    # 4) 시장 이격율 (옵션)
+    market_disparity = None
+    if market_df is not None:
+        m_latest = market_df.iloc[-1]
+        m_close = float(m_latest["Close"])
+        m_ma20 = float(m_latest["MA20"])
+        if pd.notna(m_ma20) and m_ma20 != 0:
+            market_disparity = (m_close - m_ma20) / m_ma20 * 100
+            if market_disparity <= -3 and disparity <= -10:
+                score += 1
+                reasons.append(f"시장 {market_disparity:.1f}% + 종목 패닉")
+                m_comment = "시장 패닉 + 종목 과매도 — BNF 매수 강화"
+            elif market_disparity >= 5 and disparity >= 7:
+                score -= 1
+                reasons.append(f"시장 +{market_disparity:.1f}% + 종목 과열")
+                m_comment = "시장 과열 + 종목 과열 — 조정 강화"
+            else:
+                m_comment = f"시장 이격 {market_disparity:.1f}%"
+            indicators.append({
+                "name": "시장 이격율",
+                "value": f"{market_disparity:.1f}%",
+                "comment": m_comment,
+            })
+
+    if score >= 2:
+        signal = "매수"
+    elif score <= -2:
+        signal = "매도"
+    else:
+        signal = "관망"
+
+    return {
+        "signal": signal,
+        "score": score,
+        "reasons": reasons,
+        "indicators": indicators,
+        "disparity": round(disparity, 1),
+        "market_disparity": round(market_disparity, 1) if market_disparity is not None else None,
     }

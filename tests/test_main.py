@@ -59,7 +59,7 @@ class TestAutoAnalyzeMarket:
         monkeypatch.setattr(main, "load_config", lambda: fake_config)
 
         analyzed = []
-        def fake_analyze(symbol, name):
+        def fake_analyze(symbol, name, market=None):
             analyzed.append(symbol)
             return {"name": name, "symbol": symbol, "df": None,
                     "signal": None, "prediction": None, "news": [], "sentiment": None}
@@ -86,7 +86,7 @@ class TestAutoAnalyzeMarket:
         ]}, "schedule": {}, "email": {}}
         monkeypatch.setattr(main, "load_config", lambda: fake_config)
 
-        def fake_analyze(symbol, name):
+        def fake_analyze(symbol, name, market=None):
             if symbol == "BAD":
                 return None  # fetch 실패 시뮬레이션
             return {"name": name, "symbol": symbol, "df": None,
@@ -142,7 +142,7 @@ class TestAutoAnalyzeMarketSavesSignal:
         }, "schedule": {}, "email": {}}
         monkeypatch.setattr(main, "load_config", lambda: fake_config)
 
-        def fake_analyze(symbol, name):
+        def fake_analyze(symbol, name, market=None):
             return {
                 "name": name, "symbol": symbol,
                 "df": None, "prediction": None, "news": [], "sentiment": None,
@@ -161,3 +161,56 @@ class TestAutoAnalyzeMarketSavesSignal:
         assert len(captured) == 1
         assert captured[0]["signal_value"] == "매수"
         assert captured[0]["signal_score"] == 4
+
+
+class TestAnalyzeStockBnfSignal:
+    def test_analyze_stock_includes_bnf_signal_with_market(self, monkeypatch):
+        """analyze_stock(market='us') → result['bnf_signal'] dict 존재."""
+        import main
+        from src import technical_analysis as ta_mod
+        import pandas as pd, numpy as np
+        n = 100
+        idx = pd.date_range("2026-01-01", periods=n, freq="D")
+        fake_df = pd.DataFrame({
+            "Open": np.linspace(100, 110, n), "High": np.linspace(102, 112, n),
+            "Low": np.linspace(98, 108, n), "Close": np.linspace(100, 110, n),
+            "Volume": [1_000_000] * n,
+        }, index=idx)
+        monkeypatch.setattr(main, "fetch_stock_data", lambda s, **k: fake_df)
+        monkeypatch.setattr(main, "fetch_news", lambda s: [])
+        monkeypatch.setattr(main._engine, "run", lambda df, sym: {})
+        monkeypatch.setattr("src.ml_predictor.analyze_sentiment", lambda news: {})
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mkt: fake_df)
+
+        result = main.analyze_stock("AAPL", "Apple", market="us")
+        assert result is not None
+        assert "bnf_signal" in result
+        assert result["bnf_signal"] is not None
+        assert "signal" in result["bnf_signal"]
+
+    def test_analyze_stock_market_none_bnf_uses_no_market(self, monkeypatch):
+        """market=None → bnf_signal['market_disparity']=None, fetch_market_df 호출 안 됨."""
+        import main
+        from src import technical_analysis as ta_mod
+        import pandas as pd, numpy as np
+        n = 100
+        idx = pd.date_range("2026-01-01", periods=n, freq="D")
+        fake_df = pd.DataFrame({
+            "Open": np.linspace(100, 110, n), "High": np.linspace(102, 112, n),
+            "Low": np.linspace(98, 108, n), "Close": np.linspace(100, 110, n),
+            "Volume": [1_000_000] * n,
+        }, index=idx)
+        monkeypatch.setattr(main, "fetch_stock_data", lambda s, **k: fake_df)
+        monkeypatch.setattr(main, "fetch_news", lambda s: [])
+        monkeypatch.setattr(main._engine, "run", lambda df, sym: {})
+        monkeypatch.setattr("src.ml_predictor.analyze_sentiment", lambda news: {})
+
+        called = []
+        monkeypatch.setattr(ta_mod, "fetch_market_df",
+                            lambda mkt: (called.append(mkt), fake_df)[1])
+
+        result = main.analyze_stock("AAPL", "Apple")  # market 인자 없이
+        assert result is not None
+        assert result["bnf_signal"] is not None
+        assert result["bnf_signal"]["market_disparity"] is None
+        assert called == []
