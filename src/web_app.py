@@ -47,6 +47,36 @@ if not _secret_key:
     )
 app.secret_key = _secret_key
 
+# Basic Auth — 인터넷 노출 시 (예: Tailscale Funnel) 인증 게이트.
+# ENABLE_BASIC_AUTH=1 일 때 USERNAME/PASSWORD 둘 다 필요. 미설정 시 인증 우회 (로컬 개발).
+_basic_auth_on = os.environ.get("ENABLE_BASIC_AUTH", "").strip().lower() in ("1", "true", "yes")
+_basic_auth_user = os.environ.get("BASIC_AUTH_USERNAME", "")
+_basic_auth_pass = os.environ.get("BASIC_AUTH_PASSWORD", "")
+if _basic_auth_on and (not _basic_auth_user or not _basic_auth_pass):
+    raise RuntimeError(
+        "ENABLE_BASIC_AUTH=1 인 경우 BASIC_AUTH_USERNAME 과 BASIC_AUTH_PASSWORD 가 모두 필요합니다."
+    )
+
+
+@app.before_request
+def _basic_auth_gate():
+    """ENABLE_BASIC_AUTH=1 일 때 모든 요청에 Basic Auth 검증."""
+    if not _basic_auth_on:
+        return None
+    auth = request.authorization
+    if (
+        auth is not None
+        and auth.username == _basic_auth_user
+        and secrets.compare_digest(auth.password or "", _basic_auth_pass)
+    ):
+        return None
+    return Response(
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="stock-analyzer"'},
+    )
+
+
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
 
 # 백그라운드 작업 저장소: {job_id: {status, symbol, name, result_html, error, started_at}}

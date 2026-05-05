@@ -497,3 +497,42 @@ class TestSafeCacheGetAndReturnToAllowlist:
         resp = _post(client, "/analyze/AAPL", {"return_to": "banana"})
         assert resp.status_code == 303
         assert resp.headers["Location"].startswith("/jobs/")
+
+
+class TestBasicAuthGate:
+    def test_no_auth_allowed_when_disabled(self, client, monkeypatch):
+        """ENABLE_BASIC_AUTH 미설정 (기본값) → 인증 없이 모든 요청 허용."""
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", False)
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+    def test_returns_401_without_auth_when_enabled(self, client, monkeypatch):
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_user", "admin")
+        monkeypatch.setattr(wa, "_basic_auth_pass", "secret")
+        resp = client.get("/")
+        assert resp.status_code == 401
+        assert "WWW-Authenticate" in resp.headers
+        assert resp.headers["WWW-Authenticate"].startswith("Basic")
+
+    def test_returns_401_on_wrong_password(self, client, monkeypatch):
+        import src.web_app as wa
+        from base64 import b64encode
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_user", "admin")
+        monkeypatch.setattr(wa, "_basic_auth_pass", "secret")
+        creds = b64encode(b"admin:wrong").decode()
+        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 401
+
+    def test_returns_200_on_correct_credentials(self, client, monkeypatch):
+        import src.web_app as wa
+        from base64 import b64encode
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_user", "admin")
+        monkeypatch.setattr(wa, "_basic_auth_pass", "secret")
+        creds = b64encode(b"admin:secret").decode()
+        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        assert resp.status_code == 200
