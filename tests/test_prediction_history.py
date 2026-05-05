@@ -476,3 +476,112 @@ class TestGetBacktestResults:
         assert result["summary"]["rf"]["hit_rate"] == pytest.approx(2 / 3, abs=1e-6)
         assert result["summary"]["lgbm"]["hit_rate"] == pytest.approx(1 / 3, abs=1e-6)
         assert len(result["rows"]) == 6
+
+
+class TestListHistory:
+    @pytest.fixture(autouse=True)
+    def _freeze_time(self, monkeypatch):
+        """테스트 데이터(1730000000 ~ 2024-10-27)가 90일 cutoff 안에 들어오도록
+        time.time 을 그 직후로 고정. test_90_day_cutoff 는 자체 monkeypatch 로 덮어씀."""
+        monkeypatch.setattr(time, "time", lambda: 1730086400)  # 2024-10-28
+
+    def _insert_row(self, db_path, *, symbol, ts, target_date, model,
+                    direction="상승", confidence=0.7, base_close=100.0,
+                    actual_close=None, hit=None, source="live", backtest_id=None):
+        """Helper: 직접 SQL insert (insert_live 의 모델 mapping 우회)."""
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """INSERT INTO predictions
+                   (symbol, ts, target_date, model, direction, confidence,
+                    actual_close, base_close, hit, source, backtest_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (symbol, ts, target_date, model, direction, confidence,
+                 actual_close, base_close, hit, source, backtest_id),
+            )
+
+    def test_empty_db_returns_empty_list(self, tmp_db):
+        ph.init_db()
+        assert ph.list_history("AAPL", days=90) == []
+
+    def test_pivots_5_models_into_one_row(self, tmp_db):
+        ph.init_db()
+        td = 1730000000  # 임의 unix epoch
+        for model in ("rf", "lgbm", "lstm", "transformer", "ensemble"):
+            self._insert_row(tmp_db, symbol="AAPL", ts=1729900000,
+                             target_date=td, model=model,
+                             direction="상승", confidence=0.7,
+                             base_close=100.0, actual_close=105.0, hit=1)
+        rows = ph.list_history("AAPL", days=90)
+        assert len(rows) == 1
+        assert rows[0]["target_date"] == td
+        assert rows[0]["base_close"] == 100.0
+        assert rows[0]["actual_close"] == 105.0
+        assert rows[0]["ensemble_hit"] == 1
+        assert set(rows[0]["models"].keys()) == {
+            "rf", "lgbm", "lstm", "transformer", "ensemble",
+        }
+        for m_dict in rows[0]["models"].values():
+            assert m_dict["direction"] == "상승"
+            assert m_dict["confidence"] == 0.7
+            assert m_dict["hit"] == 1
+
+    def test_evaluated_and_pending_rows_mixed(self, tmp_db):
+        ph.init_db()
+        # 평가된 row (어제)
+        self._insert_row(tmp_db, symbol="AAPL", ts=1729900000,
+                         target_date=1730000000, model="ensemble",
+                         actual_close=105.0, hit=1)
+        # 평가 대기 row (오늘 — actual_close NULL)
+        self._insert_row(tmp_db, symbol="AAPL", ts=1730000000,
+                         target_date=1730086400, model="ensemble",
+                         actual_close=None, hit=None)
+        rows = ph.list_history("AAPL", days=90)
+        assert len(rows) == 2
+        # 시간순 내림차순 — 최신이 먼저
+        assert rows[0]["target_date"] == 1730086400
+        assert rows[0]["actual_close"] is None
+        assert rows[0]["ensemble_hit"] is None
+        assert rows[1]["actual_close"] == 105.0
+        assert rows[1]["ensemble_hit"] == 1
+
+    def test_90_day_cutoff(self, tmp_db, monkeypatch):
+        import time
+        ph.init_db()
+        now = 1730000000
+        monkeypatch.setattr(time, "time", lambda: now)
+        old_td = now - 91 * 86400  # 91일 전 — 제외
+        new_td = now - 89 * 86400  # 89일 전 — 포함
+        self._insert_row(tmp_db, symbol="AAPL", ts=now, target_date=old_td,
+                         model="ensemble", hit=1, actual_close=105.0)
+        self._insert_row(tmp_db, symbol="AAPL", ts=now, target_date=new_td,
+                         model="ensemble", hit=0, actual_close=95.0)
+        rows = ph.list_history("AAPL", days=90)
+        assert len(rows) == 1
+        assert rows[0]["target_date"] == new_td
+
+    def test_excludes_backtest_source(self, tmp_db):
+        ph.init_db()
+        self._insert_row(tmp_db, symbol="AAPL", ts=1729900000,
+                         target_date=1730000000, model="ensemble",
+                         source="live", hit=1, actual_close=105.0)
+        self._insert_row(tmp_db, symbol="AAPL", ts=1729900000,
+                         target_date=1730000000, model="ensemble",
+                         source="backtest", backtest_id="bt1",
+                         hit=0, actual_close=95.0)
+        rows = ph.list_history("AAPL", days=90)
+        assert len(rows) == 1
+        # live row 의 hit=1 가 사용됨 (backtest 격리)
+        assert rows[0]["ensemble_hit"] == 1
+
+    def test_isolates_other_symbols(self, tmp_db):
+        ph.init_db()
+        self._insert_row(tmp_db, symbol="AAPL", ts=1729900000,
+                         target_date=1730000000, model="ensemble",
+                         hit=1, actual_close=105.0)
+        self._insert_row(tmp_db, symbol="TSLA", ts=1729900000,
+                         target_date=1730000000, model="ensemble",
+                         hit=0, actual_close=200.0)
+        rows = ph.list_history("AAPL", days=90)
+        assert len(rows) == 1
+        assert rows[0]["actual_close"] == 105.0

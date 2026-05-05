@@ -644,6 +644,90 @@ body {
   .field input, .field select { width: 100%; }
   .toolbar { flex-direction: column; align-items: flex-start; }
 }
+
+/* ── prediction-history section ───────────────────────────────────────── */
+.hit-rate-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.hit-rate-card {
+  background: var(--white); border: 1px solid var(--slate-200);
+  border-radius: var(--radius); padding: 14px; text-align: center;
+}
+.hit-rate-card.empty { opacity: 0.55; }
+.hit-rate-card .name  { font-size: 0.78rem; color: var(--slate-500); font-weight: 600; }
+.hit-rate-card .value { font-size: 1.6rem; font-weight: 700; margin: 4px 0; }
+.hit-rate-card .n     { font-size: 0.72rem; color: var(--slate-500); }
+
+.history-details { margin-top: 12px; }
+.history-details summary {
+  font-weight: 600; color: var(--blue-800); padding: 6px 0;
+  cursor: pointer; list-style: revert;
+}
+.history-details[open] summary { margin-bottom: 12px; }
+
+.history-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.history-table th {
+  background: var(--slate-50); padding: 8px 10px; font-size: 0.72rem;
+  text-transform: uppercase; color: var(--slate-500); text-align: center;
+  white-space: nowrap;
+}
+.history-table td { padding: 8px 10px; border-bottom: 1px solid var(--slate-100); text-align: center; }
+.history-table td.num { font-family: 'Fira Code', monospace; text-align: right; }
+.history-table tbody tr:hover td { background: var(--slate-50); }
+.history-table tr.row-pending td { color: var(--slate-500); background: var(--slate-50); }
+
+.pred-cell { font-family: 'Fira Code', monospace; font-size: 0.78rem; padding: 4px 8px; }
+.pred-cell.pred-hit  { background: var(--green-100); color: var(--green-600); }
+.pred-cell.pred-miss { background: var(--red-100);   color: var(--red-600); }
+.pred-cell.pred-pending { color: var(--slate-500); }
+
+.badge-hit, .badge-miss, .badge-pending {
+  display: inline-block; padding: 3px 9px; border-radius: 20px;
+  font-size: 0.78rem; font-weight: 600;
+}
+.badge-hit { background: var(--green-100); color: var(--green-600); }
+.badge-miss { background: var(--red-100); color: var(--red-600); }
+.badge-pending { background: var(--slate-100); color: var(--slate-500); }
+
+/* ── CSS-only 모델 설명 탭바 ─────────────────────────────────────────── */
+.model-tabs { margin: 16px 0 12px; }
+.mtab-radio { position: absolute; opacity: 0; pointer-events: none; }
+.mtab-list {
+  display: flex; gap: 2px; border-bottom: 2px solid var(--slate-200);
+  flex-wrap: wrap;
+}
+.mtab-label {
+  padding: 8px 16px; cursor: pointer; font-weight: 600;
+  font-size: 0.85rem; color: var(--slate-500);
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  transition: color var(--transition), border-color var(--transition);
+  user-select: none;
+}
+.mtab-label:hover { color: var(--blue-600); }
+
+.mtab-panel { display: none; padding: 16px 4px; line-height: 1.7; color: var(--slate-700); }
+.mtab-panel h3 { font-size: 1rem; color: var(--blue-900); margin-bottom: 8px; }
+.mtab-panel strong { color: var(--slate-900); }
+
+#mtab-rf:checked          ~ .mtab-list .mtab-label-rf,
+#mtab-lgbm:checked        ~ .mtab-list .mtab-label-lgbm,
+#mtab-lstm:checked        ~ .mtab-list .mtab-label-lstm,
+#mtab-transformer:checked ~ .mtab-list .mtab-label-transformer,
+#mtab-ensemble:checked    ~ .mtab-list .mtab-label-ensemble {
+  color: var(--blue-800); border-bottom-color: var(--blue-600);
+}
+#mtab-rf:checked          ~ .mtab-panels .mtab-panel-rf,
+#mtab-lgbm:checked        ~ .mtab-panels .mtab-panel-lgbm,
+#mtab-lstm:checked        ~ .mtab-panels .mtab-panel-lstm,
+#mtab-transformer:checked ~ .mtab-panels .mtab-panel-transformer,
+#mtab-ensemble:checked    ~ .mtab-panels .mtab-panel-ensemble { display: block; }
+
+.mtab-radio:focus-visible ~ .mtab-list .mtab-label {
+  outline: 2px solid var(--blue-500); outline-offset: 2px;
+}
 """
 
 _AUTOCOMPLETE_JS = """
@@ -857,6 +941,200 @@ def _render_no_cache(symbol: str, name: str) -> str:
       <input type="hidden" name="return_to" value="stock">
       <button type="submit" class="btn btn-primary">▶ 분석 시작</button>
     </form>'''
+
+
+# ── 모델 설명 (정적) ──────────────────────────────────────────────────────
+_MODEL_INFO = {
+    "rf": {
+        "name": "RF (Random Forest)",
+        "desc": (
+            "여러 결정 트리를 무작위 샘플링으로 학습 시키고 다수결로 결정한다. "
+            "비선형 패턴 포착에 강하고 과적합 저항성이 높음. "
+            "<strong>강점</strong>: 안정적이고 해석 가능. "
+            "<strong>약점</strong>: 시간 의존성을 직접 모델링하지 않음."
+        ),
+    },
+    "lgbm": {
+        "name": "LGBM (LightGBM)",
+        "desc": (
+            "그래디언트 부스팅 트리. 약한 학습기를 순차적으로 쌓아 잔차를 줄인다. "
+            "leaf-wise 성장으로 학습 빠르고 메모리 효율적. "
+            "<strong>강점</strong>: 정확도 높고 학습 빠름. "
+            "<strong>약점</strong>: 작은 데이터에 과적합 가능."
+        ),
+    },
+    "lstm": {
+        "name": "LSTM (Long Short-Term Memory)",
+        "desc": (
+            "순환 신경망 변형. 게이트 구조로 시계열의 장기 의존성을 학습. "
+            "긴 추세 포착에 강함. "
+            "<strong>강점</strong>: 시계열 패턴 모델링. "
+            "<strong>약점</strong>: 학습 느리고 데이터를 많이 요구함."
+        ),
+    },
+    "transformer": {
+        "name": "Transformer",
+        "desc": (
+            "어텐션 메커니즘 기반. 시계열 임의 위치 간 관계를 동시에 가중. "
+            "최근 NLP·시계열에서 SOTA. "
+            "<strong>강점</strong>: 긴/복잡한 패턴. "
+            "<strong>약점</strong>: 작은 데이터에서 과적합 위험, 연산량 큼."
+        ),
+    },
+    "ensemble": {
+        "name": "Ensemble (앙상블)",
+        "desc": (
+            "위 4개 모델 (RF, LGBM, LSTM, Transformer) 의 예측을 가중 평균/투표로 결합. "
+            "단일 모델의 약점을 상쇄해 안정성을 높인다. "
+            "<strong>강점</strong>: 평균적으로 가장 신뢰할 만한 신호. "
+            "<strong>약점</strong>: 개별 모델보다 해석이 어려움."
+        ),
+    },
+}
+
+
+def _render_model_tabs() -> str:
+    """CSS-only 모델 설명 탭바 (radio + label + :checked 셀렉터)."""
+    radios = []
+    labels = []
+    panels = []
+    for i, key in enumerate(("rf", "lgbm", "lstm", "transformer", "ensemble")):
+        info = _MODEL_INFO[key]
+        checked = " checked" if i == 0 else ""
+        short = info["name"].split(" (")[0]
+        radios.append(
+            f'<input type="radio" name="model-tab" id="mtab-{key}" class="mtab-radio"{checked}>'
+        )
+        labels.append(
+            f'<label for="mtab-{key}" class="mtab-label mtab-label-{key}">{short}</label>'
+        )
+        panels.append(
+            f'<section class="mtab-panel mtab-panel-{key}">'
+            f'<h3>{info["name"]}</h3><p>{info["desc"]}</p>'
+            f'</section>'
+        )
+    return (
+        f'<div class="model-tabs">'
+        f'{"".join(radios)}'
+        f'<div class="mtab-list">{"".join(labels)}</div>'
+        f'<div class="mtab-panels">{"".join(panels)}</div>'
+        f'</div>'
+    )
+
+
+def _hit_rate_card(name: str, pct: float | None, n: int) -> str:
+    if pct is None:
+        return (
+            f'<div class="hit-rate-card empty">'
+            f'<div class="name">{name}</div>'
+            f'<div class="value">—</div>'
+            f'<div class="n">평가 없음</div></div>'
+        )
+    color = "var(--green-600)" if pct >= 60 else ("var(--amber-500)" if pct >= 50 else "var(--red-600)")
+    return (
+        f'<div class="hit-rate-card">'
+        f'<div class="name">{name}</div>'
+        f'<div class="value" style="color:{color};">{pct:.1f}%</div>'
+        f'<div class="n">{n}회 평가</div></div>'
+    )
+
+
+def _render_hit_rate_summary(rates: dict) -> str:
+    """모델 5개 hit rate 요약 카드 그리드. 비어있으면 안내 alert."""
+    if not rates:
+        return '<div class="alert alert-info">평가된 예측이 아직 없습니다.</div>'
+    label = {"rf": "RF", "lgbm": "LGBM", "lstm": "LSTM",
+             "transformer": "Transformer", "ensemble": "Ensemble"}
+    cards = []
+    for m in ("rf", "lgbm", "lstm", "transformer", "ensemble"):
+        info = rates.get(m)
+        if info is None:
+            cards.append(_hit_rate_card(label[m], None, 0))
+        else:
+            cards.append(_hit_rate_card(label[m], info["hit_rate"] * 100, info["n"]))
+    return f'<div class="hit-rate-grid">{"".join(cards)}</div>'
+
+
+def _pred_cell(m: dict | None) -> str:
+    """시간순 표의 모델 셀 — 방향 + 신뢰도 % + hit/miss/pending 색상."""
+    if m is None:
+        return '<td>—</td>'
+    arrow = "🔼" if m["direction"] == "상승" else "🔽"
+    pct = int(m["confidence"] * 100)
+    if m.get("hit") is None:
+        cls = "pending"
+    elif m["hit"] == 1:
+        cls = "hit"
+    else:
+        cls = "miss"
+    return f'<td class="pred-cell pred-{cls}">{arrow}{pct}%</td>'
+
+
+def _render_history_table(rows: list[dict]) -> str:
+    """시간순 예측 히스토리 표 — list_history 결과 기반."""
+    head = (
+        "<thead><tr>"
+        "<th>분석일</th><th>기준 종가</th>"
+        "<th>RF</th><th>LGBM</th><th>LSTM</th><th>Transf</th><th>Ensemble</th>"
+        "<th>실제 종가</th><th>판정</th>"
+        "</tr></thead>"
+    )
+    body_rows = []
+    for r in rows:
+        date_str = _format_kst(r["target_date"]).split()[0]  # 'YYYY-MM-DD'
+        base = f"{r['base_close']:,.0f}"
+        cells = "".join(
+            _pred_cell(r["models"].get(m))
+            for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+        )
+        if r["actual_close"] is None:
+            actual = "—"
+            verdict = '<span class="badge-pending">평가 대기</span>'
+            row_attr = ' class="row-pending"'
+        else:
+            actual = f"{r['actual_close']:,.0f}"
+            verdict = (
+                '<span class="badge-hit">✅ 적중</span>'
+                if r["ensemble_hit"] == 1
+                else '<span class="badge-miss">❌ 빗나감</span>'
+            )
+            row_attr = ""
+        body_rows.append(
+            f"<tr{row_attr}><td>{date_str}</td><td class='num'>{base}</td>"
+            f"{cells}<td class='num'>{actual}</td><td>{verdict}</td></tr>"
+        )
+    return (
+        f'<table class="history-table">{head}'
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        f'</table>'
+    )
+
+
+def _render_prediction_history(symbol: str) -> str:
+    """예측 정확도 섹션 — 헤더 + 요약 카드 + 모델 탭바 + 시간순 표 (<details>)."""
+    rates = prediction_history.hit_rate_by_model(symbol, source="live")
+    rows = prediction_history.list_history(symbol, days=90)
+    if not rates and not rows:
+        return ""
+
+    summary = _render_hit_rate_summary(rates)
+    tabs = _render_model_tabs()
+
+    if rows:
+        details_inner = _render_history_table(rows)
+        details_summary_text = f"최근 90일 예측 히스토리 ({len(rows)}회) — 클릭하여 펼치기"
+    else:
+        details_inner = "<p>아직 평가된 예측 이력이 없습니다.</p>"
+        details_summary_text = "최근 90일 예측 히스토리"
+
+    details = (
+        f'<details class="history-details">'
+        f'<summary>{details_summary_text}</summary>'
+        f'<div style="overflow-x:auto;">{details_inner}</div>'
+        f'</details>'
+    )
+    header = '<div class="page-header" style="margin-top:32px;"><h2>예측 정확도</h2></div>'
+    return header + summary + tabs + details
 
 
 def _render_stock_with_overlay(symbol: str, name: str, row: dict | None, job_id: str) -> str:
@@ -1183,8 +1461,15 @@ def stock_view(symbol: str):
         return _page(f"{name} 분석", _render_no_cache(symbol, name))
 
     fresh = analysis_cache.is_fresh(row, int(time.time()))
-    body = _render_meta_bar(row, fresh, name) + f'<div class="card result-frame">{row["result_html"]}</div>'
-    return _page(f"{name} 분석 결과", body)
+    body_parts = [
+        _render_meta_bar(row, fresh, name),
+        f'<div class="card result-frame">{row["result_html"]}</div>',
+    ]
+    try:
+        body_parts.append(_render_prediction_history(symbol))
+    except Exception as e:
+        logger.warning("prediction_history 렌더 실패 — %s: %s", symbol, e)
+    return _page(f"{name} 분석 결과", "".join(body_parts))
 
 
 @app.route("/stock/all")

@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
@@ -318,3 +319,75 @@ def get_backtest_results(backtest_id: str) -> dict:
             for r in rows
         ],
     }
+
+
+def list_history(symbol: str, days: int = 90) -> list[dict]:
+    """종목의 최근 N일 예측 히스토리 (target_date 내림차순).
+
+    같은 (symbol, target_date) 의 5 모델 row 를 한 dict 에 묶는다.
+    ensemble row 가 있으면 base_close/actual_close/ts 의 대표값으로 사용,
+    없으면 첫 모델 row 사용.
+
+    Args:
+        symbol: 종목 심볼.
+        days: cutoff 일수 — target_date >= now - days*86400 만 포함.
+
+    Returns:
+        [
+          {
+            "target_date":   int,            # KST 자정 unix epoch
+            "ts":            int,            # 분석 실행 시각 (대표 모델)
+            "base_close":    float,
+            "actual_close":  float | None,
+            "ensemble_hit":  int | None,     # 0/1 또는 None (평가 대기)
+            "models": {
+                "rf":          {"direction": str, "confidence": float, "hit": int|None},
+                ...
+            },
+          },
+          ...
+        ]
+    """
+    cutoff = int(time.time()) - days * 86400
+    groups: dict[int, dict[str, dict]] = defaultdict(dict)
+    with closing(_connect()) as conn:
+        cur = conn.execute(
+            """SELECT ts, target_date, model, direction, confidence,
+                      base_close, actual_close, hit
+               FROM predictions
+               WHERE symbol = ?
+                 AND source = 'live'
+                 AND target_date >= ?
+               ORDER BY target_date DESC, model""",
+            (symbol, cutoff),
+        )
+        for ts, td, model, direction, confidence, base_close, actual_close, hit in cur:
+            groups[td][model] = {
+                "ts": ts,
+                "direction": direction,
+                "confidence": confidence,
+                "base_close": base_close,
+                "actual_close": actual_close,
+                "hit": hit,
+            }
+
+    result = []
+    for td in sorted(groups.keys(), reverse=True):
+        models = groups[td]
+        repr_row = models.get("ensemble") or next(iter(models.values()))
+        result.append({
+            "target_date": td,
+            "ts": repr_row["ts"],
+            "base_close": repr_row["base_close"],
+            "actual_close": repr_row["actual_close"],
+            "ensemble_hit": models.get("ensemble", {}).get("hit"),
+            "models": {
+                m: {
+                    "direction": v["direction"],
+                    "confidence": v["confidence"],
+                    "hit": v["hit"],
+                }
+                for m, v in models.items()
+            },
+        })
+    return result

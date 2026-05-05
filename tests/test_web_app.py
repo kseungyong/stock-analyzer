@@ -673,3 +673,323 @@ class TestLogout:
         monkeypatch.setattr(wa, "_basic_auth_on", False)
         resp = client.get("/")
         assert b'href="/logout"' not in resp.data
+
+
+class TestModelTabs:
+    def test_renders_5_radio_inputs_with_rf_checked(self, client):
+        """탭바 — 라디오 5개, RF 가 기본 활성."""
+        from src.web_app import _render_model_tabs
+        html = _render_model_tabs()
+        # 5개 라디오
+        for key in ("rf", "lgbm", "lstm", "transformer", "ensemble"):
+            assert f'id="mtab-{key}"' in html
+            assert f'for="mtab-{key}"' in html
+            assert f'mtab-panel-{key}' in html
+        # RF 가 checked — radio input 자체에 'checked' 속성 + RF 키워드
+        rf_input_segment = html.split('id="mtab-rf"')[1].split(">")[0]
+        assert "checked" in rf_input_segment
+
+    def test_panels_contain_model_descriptions(self, client):
+        """각 모델 패널에 한국어 설명 키워드 포함."""
+        from src.web_app import _render_model_tabs
+        html = _render_model_tabs()
+        assert "Random Forest" in html
+        assert "그래디언트 부스팅" in html  # LGBM
+        assert "Long Short-Term Memory" in html
+        assert "어텐션" in html              # Transformer
+        assert "앙상블" in html              # Ensemble
+
+    def test_panel_has_strengths_weaknesses(self, client):
+        """각 패널에 '강점' 과 '약점' 마크업."""
+        from src.web_app import _render_model_tabs
+        html = _render_model_tabs()
+        # 5 모델 × 2 → 최소 5번씩 등장
+        assert html.count("<strong>강점</strong>") >= 5
+        assert html.count("<strong>약점</strong>") >= 5
+
+
+class TestHitRateSummary:
+    def test_empty_rates_shows_pending_alert(self, client):
+        from src.web_app import _render_hit_rate_summary
+        html = _render_hit_rate_summary({})
+        assert "평가된 예측이 아직 없습니다" in html
+
+    def test_renders_5_cards_with_pct(self, client):
+        from src.web_app import _render_hit_rate_summary
+        rates = {
+            "rf":          {"hit_rate": 0.72, "n": 50},
+            "lgbm":        {"hit_rate": 0.65, "n": 50},
+            "lstm":        {"hit_rate": 0.45, "n": 50},
+            "transformer": {"hit_rate": 0.55, "n": 50},
+            "ensemble":    {"hit_rate": 0.68, "n": 50},
+        }
+        html = _render_hit_rate_summary(rates)
+        for label in ("RF", "LGBM", "LSTM", "Transformer", "Ensemble"):
+            assert label in html
+        assert "72.0%" in html
+        assert "45.0%" in html
+        assert "50회 평가" in html
+        # 색상 클래스 — green 60%+, amber 50%+, red <50
+        assert "var(--green-600)" in html  # rf=72, ensemble=68
+        assert "var(--amber-500)" in html  # transformer=55
+        assert "var(--red-600)" in html    # lstm=45
+
+    def test_missing_model_shows_empty_card(self, client):
+        from src.web_app import _render_hit_rate_summary
+        rates = {"rf": {"hit_rate": 0.7, "n": 10}}
+        html = _render_hit_rate_summary(rates)
+        # 다른 4 모델은 "평가 없음"
+        assert html.count('hit-rate-card empty') == 4
+        assert "평가 없음" in html
+
+
+class TestHistoryTable:
+    def _row(self, *, td=1730000000, ensemble_hit=1, actual=105.0,
+             models=None):
+        if models is None:
+            models = {
+                m: {"direction": "상승", "confidence": 0.7, "hit": ensemble_hit}
+                for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+            }
+        return {
+            "target_date": td,
+            "ts": td - 86400,
+            "base_close": 100.0,
+            "actual_close": actual,
+            "ensemble_hit": ensemble_hit,
+            "models": models,
+        }
+
+    def test_renders_thead_with_9_columns(self, client):
+        from src.web_app import _render_history_table
+        html = _render_history_table([self._row()])
+        for col in ("분석일", "기준 종가", "RF", "LGBM", "LSTM",
+                    "Transf", "Ensemble", "실제 종가", "판정"):
+            assert col in html
+
+    def test_hit_row_shows_green_verdict(self, client):
+        from src.web_app import _render_history_table
+        html = _render_history_table([self._row(ensemble_hit=1, actual=105.0)])
+        assert 'badge-hit' in html
+        assert "적중" in html
+        assert 'pred-hit' in html  # 모델 셀
+
+    def test_miss_row_shows_red_verdict(self, client):
+        from src.web_app import _render_history_table
+        miss_models = {
+            m: {"direction": "상승", "confidence": 0.7, "hit": 0}
+            for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+        }
+        html = _render_history_table([self._row(
+            ensemble_hit=0, actual=95.0, models=miss_models,
+        )])
+        assert 'badge-miss' in html
+        assert "빗나감" in html
+        assert 'pred-miss' in html
+
+    def test_pending_row_is_grey(self, client):
+        from src.web_app import _render_history_table
+        pending_models = {
+            m: {"direction": "하락", "confidence": 0.6, "hit": None}
+            for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+        }
+        html = _render_history_table([self._row(
+            ensemble_hit=None, actual=None, models=pending_models,
+        )])
+        assert 'class="row-pending"' in html
+        assert "평가 대기" in html
+        assert "—" in html  # actual_close 자리
+        assert 'pred-pending' in html
+
+    def test_missing_model_cell_shows_dash(self, client):
+        from src.web_app import _render_history_table
+        partial = {
+            "rf": {"direction": "상승", "confidence": 0.7, "hit": 1},
+            # lgbm/lstm/transformer/ensemble 누락
+        }
+        html = _render_history_table([self._row(
+            ensemble_hit=None, actual=105.0, models=partial,
+        )])
+        # 누락 셀 4개
+        assert html.count("<td>—</td>") >= 4
+
+    def test_arrow_direction(self, client):
+        from src.web_app import _render_history_table
+        up_models = {m: {"direction": "상승", "confidence": 0.7, "hit": 1}
+                     for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")}
+        down_models = {m: {"direction": "하락", "confidence": 0.6, "hit": 0}
+                       for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")}
+        html = _render_history_table([
+            self._row(td=1730086400, ensemble_hit=1, actual=105.0, models=up_models),
+            self._row(td=1730000000, ensemble_hit=0, actual=95.0, models=down_models),
+        ])
+        assert "🔼" in html  # 상승
+        assert "🔽" in html  # 하락
+
+
+class TestRenderPredictionHistory:
+    def test_empty_when_no_data(self, client, monkeypatch):
+        """rates + rows 둘 다 비어있으면 빈 문자열."""
+        from src import prediction_history
+        from src.web_app import _render_prediction_history
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [])
+        assert _render_prediction_history("AAPL") == ""
+
+    def test_shows_summary_only_when_no_rows(self, client, monkeypatch):
+        """rates 만 있고 rows 비어있으면 섹션 표시 + details 안내."""
+        from src import prediction_history
+        from src.web_app import _render_prediction_history
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {"rf": {"hit_rate": 0.7, "n": 10}})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [])
+        html = _render_prediction_history("AAPL")
+        assert "예측 정확도" in html
+        assert "70.0%" in html
+        assert "아직 평가된 예측 이력이 없습니다" in html
+
+    def test_full_rendering_with_rates_and_rows(self, client, monkeypatch):
+        """rates + rows 둘 다 있으면 헤더 + summary + tabs + details 모두."""
+        from src import prediction_history
+        from src.web_app import _render_prediction_history
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {"ensemble": {"hit_rate": 0.65, "n": 20}})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [{
+                                "target_date": 1730000000, "ts": 1729900000,
+                                "base_close": 100.0, "actual_close": 105.0,
+                                "ensemble_hit": 1,
+                                "models": {
+                                    m: {"direction": "상승", "confidence": 0.7, "hit": 1}
+                                    for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+                                },
+                            }])
+        html = _render_prediction_history("AAPL")
+        assert "<h2>예측 정확도</h2>" in html
+        # 요약 카드
+        assert "65.0%" in html
+        # 탭바
+        assert 'id="mtab-rf"' in html
+        # 표 안 — details 펼친 안내
+        assert "최근 90일 예측 히스토리" in html
+        assert "1회" in html or "(1회)" in html
+        # 시간순 row
+        assert "✅ 적중" in html
+
+    def test_section_order(self, client, monkeypatch):
+        """헤더 → summary → tabs → details 순서."""
+        from src import prediction_history
+        from src.web_app import _render_prediction_history
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {"ensemble": {"hit_rate": 0.65, "n": 20}})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [{
+                                "target_date": 1730000000, "ts": 1729900000,
+                                "base_close": 100.0, "actual_close": 105.0,
+                                "ensemble_hit": 1,
+                                "models": {"ensemble": {"direction": "상승", "confidence": 0.7, "hit": 1}},
+                            }])
+        html = _render_prediction_history("AAPL")
+        i_header = html.index("예측 정확도")
+        i_summary = html.index("hit-rate-grid")
+        i_tabs = html.index("model-tabs")
+        i_details = html.index("history-details")
+        assert i_header < i_summary < i_tabs < i_details
+
+
+class TestPredictionHistorySection:
+    def test_section_absent_when_no_history(self, client, monkeypatch):
+        """예측 row 0건 → '예측 정확도' 헤더 미표시."""
+        from src import analysis_cache as ac
+        from src import prediction_history
+        ac.init_db()
+        ac.put("AAPL", "us", "<p>cached</p>", "auto_cron")
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [])
+        resp = client.get("/stock/AAPL")
+        assert resp.status_code == 200
+        assert "예측 정확도".encode() not in resp.data
+
+    def test_section_present_when_history_exists(self, client, monkeypatch):
+        from src import analysis_cache as ac
+        from src import prediction_history
+        ac.init_db()
+        ac.put("AAPL", "us", "<p>cached</p>", "auto_cron")
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {"ensemble": {"hit_rate": 0.7, "n": 10}})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [{
+                                "target_date": 1730000000, "ts": 1729900000,
+                                "base_close": 100.0, "actual_close": 105.0,
+                                "ensemble_hit": 1,
+                                "models": {
+                                    m: {"direction": "상승", "confidence": 0.7, "hit": 1}
+                                    for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+                                },
+                            }])
+        resp = client.get("/stock/AAPL")
+        assert resp.status_code == 200
+        assert "예측 정확도".encode() in resp.data
+        assert b'id="mtab-rf"' in resp.data           # 탭바
+        assert b'class="hit-rate-grid"' in resp.data  # 요약
+        assert b'class="history-table"' in resp.data  # 표
+
+    def test_pending_row_renders_grey(self, client, monkeypatch):
+        from src import analysis_cache as ac
+        from src import prediction_history
+        ac.init_db()
+        ac.put("AAPL", "us", "<p>cached</p>", "auto_cron")
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [{
+                                "target_date": 1730086400, "ts": 1730000000,
+                                "base_close": 100.0, "actual_close": None,
+                                "ensemble_hit": None,
+                                "models": {
+                                    m: {"direction": "하락", "confidence": 0.6, "hit": None}
+                                    for m in ("rf", "lgbm", "lstm", "transformer", "ensemble")
+                                },
+                            }])
+        resp = client.get("/stock/AAPL")
+        assert b'class="row-pending"' in resp.data
+        assert "평가 대기".encode() in resp.data
+
+    def test_details_summary_text(self, client, monkeypatch):
+        from src import analysis_cache as ac
+        from src import prediction_history
+        ac.init_db()
+        ac.put("AAPL", "us", "<p>cached</p>", "auto_cron")
+        monkeypatch.setattr(prediction_history, "hit_rate_by_model",
+                            lambda *a, **k: {"rf": {"hit_rate": 0.5, "n": 5}})
+        monkeypatch.setattr(prediction_history, "list_history",
+                            lambda *a, **k: [{
+                                "target_date": 1730000000, "ts": 1729900000,
+                                "base_close": 100.0, "actual_close": 105.0,
+                                "ensemble_hit": 1,
+                                "models": {"ensemble": {"direction": "상승", "confidence": 0.7, "hit": 1}},
+                            }])
+        resp = client.get("/stock/AAPL")
+        assert b'<details' in resp.data
+        assert "최근 90일 예측 히스토리".encode() in resp.data
+
+    def test_history_error_does_not_break_page(self, client, monkeypatch):
+        """list_history 가 raise 해도 페이지 자체는 200 + 캐시 결과 표시."""
+        from src import analysis_cache as ac
+        from src import prediction_history
+        ac.init_db()
+        ac.put("AAPL", "us", "<p>cached body unique</p>", "auto_cron")
+        def boom(*a, **k):
+            raise RuntimeError("db locked")
+        monkeypatch.setattr(prediction_history, "list_history", boom)
+        resp = client.get("/stock/AAPL")
+        assert resp.status_code == 200
+        # 캐시 본문은 정상 표시
+        assert b"cached body unique" in resp.data
+        # 섹션은 누락
+        assert "예측 정확도".encode() not in resp.data
