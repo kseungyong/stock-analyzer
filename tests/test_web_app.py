@@ -31,6 +31,12 @@ def client(config_file, monkeypatch):
     monkeypatch.setattr(wa, "CONFIG_PATH", config_file)
     wa.app.config["TESTING"] = True
     wa._jobs.clear()
+    # 이전 테스트에서 lock이 해제되지 않았을 경우를 대비해 초기화
+    if wa._backtest_lock.locked():
+        try:
+            wa._backtest_lock.release()
+        except RuntimeError:
+            pass
     with wa.app.test_client() as c:
         with c.session_transaction() as sess:
             sess["csrf_token"] = _CSRF_TOKEN
@@ -182,3 +188,31 @@ class TestApiStocksSearch:
             # 한글이 unicode-escape되지 않고 그대로 응답에 포함되어야 함
             assert "삼성전자".encode("utf-8") in resp.data
             m.assert_called_once_with("삼성", limit=10)
+
+
+class TestBacktest:
+    def test_csrf_missing_returns_403(self, client):
+        resp = client.post("/backtest/AAPL")
+        assert resp.status_code == 403
+
+    def test_invalid_symbol_returns_400(self, client):
+        resp = _post(client, "/backtest/<bad>", {})
+        assert resp.status_code == 400
+
+    @patch("src.web_app._run_backtest_bg")
+    def test_valid_request_redirects_to_job(self, run_mock, client):
+        resp = _post(client, "/backtest/AAPL", {})
+        assert resp.status_code == 303
+        assert "/jobs/" in resp.headers["Location"]
+        run_mock.assert_called_once()
+
+    @patch("src.web_app._run_backtest_bg")
+    def test_concurrent_request_returns_error(self, run_mock, client):
+        import src.web_app as wa
+        wa._backtest_lock.acquire()
+        try:
+            resp = _post(client, "/backtest/AAPL", {})
+            assert resp.status_code == 303
+            assert "error=" in resp.headers["Location"]
+        finally:
+            wa._backtest_lock.release()

@@ -22,6 +22,8 @@ from markupsafe import escape
 
 from src.validators import validate_stock_symbol, validate_stock_name, sanitize_stock_symbol, is_valid_search_query
 from src.stock_search import search_stocks
+from src import prediction_history
+from src import backtest as bt
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +51,8 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _JOBS_MAX = 50  # 완료된 작업 보관 최대 개수
+
+_backtest_lock = threading.Lock()  # 글로벌 백테스트 동시 실행 1개로 제한
 
 _config_lock = threading.RLock()  # settings.yaml read-modify-write 보호 (재진입 허용)
 
@@ -950,6 +954,17 @@ def job_detail(job_id: str):
         <div class="alert alert-error">{_ICON_WARN}<span>{escape(job['error'])}</span></div>"""
         return _page("분석 실패", body)
 
+    backtest_form_html = ""
+    if not job["name"].endswith("백테스트"):
+        backtest_form_html = f'''
+    <form method="post" action="/backtest/{escape(job['symbol'])}" style="margin:24px 0;">
+      {_csrf_input()}
+      <button type="submit" class="btn btn-amber">
+        🔬 백테스트 실행 (RF+LGBM, 6개월 walk-forward)
+      </button>
+    </form>
+    '''
+
     body = f"""
     <div class="page-header">
       <h1>{escape(job['name'])} 분석 결과</h1>
@@ -958,7 +973,8 @@ def job_detail(job_id: str):
     <div style="margin-bottom:16px;">
       <a class="btn btn-primary" href="/jobs/{job_id}/download">{_ICON_DL} HTML 다운로드</a>
     </div>
-    <div class="card result-frame">{job["result_html"]}</div>"""
+    <div class="card result-frame">{job["result_html"]}</div>
+    {backtest_form_html}"""
     return _page(f"{job['name']} 분석 결과", body)
 
 
@@ -997,6 +1013,96 @@ def api_stocks_search():
         logger.warning("종목 검색 실패: q=%s error=%s", q, e)
         return jsonify([])
     return jsonify(results)
+
+
+@app.route("/backtest/<path:symbol>", methods=["POST"])
+def start_backtest(symbol: str):
+    """백테스트 실행 트리거. 동시 1개로 제한."""
+    _csrf_validate()
+    symbol = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(symbol):
+        abort(400)
+
+    if not _backtest_lock.acquire(blocking=False):
+        return redirect(
+            url_for("index", error="다른 백테스트가 실행 중입니다. 잠시 후 다시 시도하세요."),
+            code=303,
+        )
+
+    job_id = uuid.uuid4().hex[:8]
+    backtest_id = uuid.uuid4().hex[:8]
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "running",
+            "symbol": symbol,
+            "name": f"{symbol} 백테스트",
+            "result_html": None,
+            "error": None,
+            "started_at": datetime.now().strftime("%H:%M:%S"),
+        }
+
+    threading.Thread(
+        target=_run_backtest_bg,
+        args=(job_id, symbol, backtest_id),
+        daemon=True,
+    ).start()
+    return redirect(f"/jobs/{job_id}", code=303)
+
+
+def _run_backtest_bg(job_id: str, symbol: str, backtest_id: str) -> None:
+    """백그라운드 백테스트 실행. 성공/실패 모두 _backtest_lock 해제."""
+    logger.info("백테스트 시작: job_id=%s symbol=%s backtest_id=%s",
+                job_id, symbol, backtest_id)
+    try:
+        from src.data_fetcher import fetch_stock_data
+        from src.technical_analysis import compute_indicators
+
+        df = fetch_stock_data(symbol)
+        df = compute_indicators(df)
+        result = bt.walk_forward(symbol, df, days=126)
+
+        if result.get("error"):
+            _jobs_set(job_id, status="error", error=result["error"])
+            return
+
+        prediction_history.insert_backtest(result["rows"], backtest_id)
+        html_out = _render_backtest_report(symbol, result)
+        _jobs_set(job_id, status="done", result_html=html_out)
+        logger.info("백테스트 완료: job_id=%s", job_id)
+    except Exception as e:
+        logger.exception("백테스트 실패: %s", e)
+        _jobs_set(job_id, status="error", error=str(e))
+    finally:
+        _backtest_lock.release()
+        _trim_jobs()
+
+
+def _render_backtest_report(symbol: str, result: dict) -> str:
+    """백테스트 결과 HTML 렌더."""
+    summary = result["summary"]
+    rows_html = []
+    model_label = {"rf": "RandomForest", "lgbm": "LightGBM", "ensemble": "Ensemble (RF+LGBM)"}
+    for model in ("rf", "lgbm", "ensemble"):
+        info = summary.get(model)
+        if not info:
+            continue
+        pct = info["hit_rate"] * 100
+        rows_html.append(
+            f"<tr><td>{model_label[model]}</td>"
+            f"<td>{pct:.1f}%</td>"
+            f"<td>{info['n']}</td></tr>"
+        )
+    return f"""
+    <h2>{escape(symbol)} 백테스트 결과 (6개월 walk-forward)</h2>
+    <table style="margin:16px 0;">
+      <thead><tr><th>모델</th><th>Hit Rate</th><th>평가 횟수</th></tr></thead>
+      <tbody>{''.join(rows_html)}</tbody>
+    </table>
+    <p style="color:#666; font-size:0.9em;">
+      backtest_id: <code>{escape(result['backtest_id'])}</code><br>
+      ⚠️ 백테스트 결과는 과거 데이터 기반이며, 미래 수익을 보장하지 않습니다.
+    </p>
+    """
 
 
 @app.route("/stocks/add", methods=["POST"])
