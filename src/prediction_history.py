@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 
@@ -187,7 +188,7 @@ def backfill_inline(symbol: str, df: pd.DataFrame) -> int:
             return len(updates)
 
 
-def backfill_all(fetch_fn) -> dict:
+def backfill_all(fetch_fn: Callable[[str], pd.DataFrame]) -> dict:
     """cron용 전체 백필 — 미평가 + target_date < now 인 예측을 심볼별 일괄 평가.
 
     Args:
@@ -213,6 +214,10 @@ def backfill_all(fetch_fn) -> dict:
             logger.warning("backfill_all fetch 실패: %s — %s", symbol, e)
             failed.append(symbol)
             continue
+        if df is None:
+            logger.warning("backfill_all fetch 실패: %s — fetch_fn returned None", symbol)
+            failed.append(symbol)
+            continue
         try:
             count = backfill_inline(symbol, df)
             total_evaluated += count
@@ -220,4 +225,8 @@ def backfill_all(fetch_fn) -> dict:
             logger.warning("backfill_all 평가 실패: %s — %s", symbol, e)
             failed.append(symbol)
 
+    logger.info(
+        "backfill_all 완료: symbols=%d evaluated=%d failed=%d",
+        len(symbols), total_evaluated, len(failed),
+    )
     return {"evaluated": total_evaluated, "failed_symbols": failed}
