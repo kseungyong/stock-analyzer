@@ -18,6 +18,7 @@ try:
 except ImportError:
     pass
 
+import pandas as pd
 from src.data_fetcher import fetch_stock_data, fetch_multiple, fetch_news
 from src.technical_analysis import compute_indicators, generate_signal
 from src.prediction_engine import PredictionEngine
@@ -25,6 +26,7 @@ from src.report_generator import generate_report
 from src.email_sender import send_report
 from src.scheduler import start_scheduler
 from src.validators import validate_stock_symbol, sanitize_stock_symbol
+from src import prediction_history
 
 _engine = PredictionEngine()
 
@@ -39,9 +41,24 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).parent / "config" / "settings.yaml"
 
 
+def _next_business_day_unix(last_index) -> int:
+    """df 마지막 인덱스 → 다음 영업일 KST 자정 → UTC unix epoch."""
+    ts = pd.Timestamp(last_index)
+    if ts.tz is None:
+        ts = ts.tz_localize("Asia/Seoul", nonexistent="shift_forward", ambiguous="raise")
+    else:
+        ts = ts.tz_convert("Asia/Seoul")
+    next_bday = (ts + pd.tseries.offsets.BDay(1)).normalize()
+    return int(next_bday.tz_convert("UTC").timestamp())
+
+
 def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+# 모듈 로드 시점에 1회 — DB 파일/스키마 보장
+prediction_history.init_db()
 
 
 def get_all_stocks(config: dict) -> list[dict]:
@@ -70,6 +87,13 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
     try:
         df = fetch_stock_data(symbol)
         df = compute_indicators(df)
+
+        # 인라인 백필 (즉시성 보조 — cron이 메인 메커니즘)
+        try:
+            prediction_history.backfill_inline(symbol, df)
+        except Exception as e:
+            logger.warning("backfill_inline 실패 (분석은 계속): %s", e)
+
         signal = generate_signal(df)
 
         from src.ml_predictor import analyze_sentiment
@@ -79,6 +103,14 @@ def analyze_stock(symbol: str, name: str) -> dict | None:
             fut_news = ex.submit(fetch_news, symbol)
             prediction = fut_pred.result()
             news = fut_news.result()
+
+        # live 예측 저장 (DB 장애 → 분석 결과는 정상 반환)
+        try:
+            last_close = float(df["Close"].iloc[-1])
+            target_date = _next_business_day_unix(df.index[-1])
+            prediction_history.insert_live(symbol, prediction, last_close, target_date)
+        except Exception as e:
+            logger.warning("insert_live 실패 (분석 결과는 정상 반환): %s", e)
 
         sentiment = analyze_sentiment(news)
 
