@@ -54,3 +54,35 @@ def send_report(html: str, config: dict) -> None:
         logger.error("이메일 발송 실패: %s", e)
     except OSError as e:
         logger.error("이메일 네트워크 오류: %s", e)
+
+
+def render_email_digest(rows: list[dict]) -> str:
+    """analysis_cache row 리스트를 받아 이메일용 HTML 합성한다.
+
+    Args:
+        rows: list_symbols() 가 반환하는 딕셔너리 리스트.
+              (cache_key, market, result_html, generated_at, source)
+
+    Returns:
+        완성된 HTML 문서 문자열 (`<html><body>...</body></html>`).
+    """
+    import time as _time
+    from datetime import datetime
+    from html import escape
+    from zoneinfo import ZoneInfo
+
+    from src import analysis_cache
+
+    now_ts = int(_time.time())
+    parts = ["<h1>일일 시장 분석 다이제스트</h1>"]
+    for row in rows:
+        gen_kst = datetime.fromtimestamp(
+            row["generated_at"], tz=ZoneInfo("Asia/Seoul")
+        ).strftime("%Y-%m-%d %H:%M")
+        fresh = "🟢 최근" if analysis_cache.is_fresh(row, now_ts) else "🟡 오래됨"
+        parts.append(
+            f'<section><h2>{escape(row["cache_key"])} '
+            f'<small>{fresh} · 분석 {gen_kst} KST</small></h2>'
+            f'{row["result_html"]}</section>'
+        )
+    return "<html><body>" + "".join(parts) + "</body></html>"

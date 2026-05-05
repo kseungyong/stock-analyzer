@@ -26,7 +26,7 @@ from src.report_generator import generate_report
 from src.email_sender import send_report
 from src.scheduler import start_scheduler
 from src.validators import validate_stock_symbol, sanitize_stock_symbol
-from src import prediction_history
+from src import prediction_history, analysis_cache
 
 _engine = PredictionEngine()
 
@@ -59,6 +59,7 @@ def load_config() -> dict:
 
 # 모듈 로드 시점에 1회 — DB 파일/스키마 보장
 prediction_history.init_db()
+analysis_cache.init_db()
 
 
 def get_all_stocks(config: dict) -> list[dict]:
@@ -157,12 +158,47 @@ def run_full_analysis(config: dict) -> str | None:
     return html
 
 
-def daily_job():
-    """스케줄러에서 호출되는 일일 작업."""
+def auto_analyze_market(market: str) -> None:
+    """시장의 모든 종목을 차례로 분석하고 analysis_cache 에 UPSERT.
+
+    cron (KST 16:00 한국 / KST 06:00 미국) 에서 호출된다.
+    """
+    from src import report_generator as _rg
+
     config = load_config()
-    html = run_full_analysis(config)
-    if html:
-        send_report(html, config["email"])
+    stocks = config.get("stocks", {}).get(market, [])
+    logger.info("자동분석 시작 — market=%s n=%d", market, len(stocks))
+    success = 0
+    for s in stocks:
+        try:
+            result = analyze_stock(s["symbol"], s["name"])
+            if result is None:
+                logger.warning("자동분석 실패(결과 없음): %s", s["symbol"])
+                continue
+            html = _rg.generate_report([result])
+            analysis_cache.put(
+                cache_key=s["symbol"],
+                market=market,
+                result_html=html,
+                source="auto_cron",
+            )
+            success += 1
+        except Exception as e:
+            logger.exception("자동분석 오류 — %s: %s", s["symbol"], e)
+    logger.info("자동분석 완료 — market=%s ok=%d/%d", market, success, len(stocks))
+
+
+def daily_email_job() -> None:
+    """캐시에서 종목별 결과를 모아 이메일 발송. 분석 재실행하지 않는다."""
+    from src.email_sender import render_email_digest
+
+    config = load_config()
+    rows = analysis_cache.list_symbols()
+    if not rows:
+        logger.warning("이메일 발송 스킵 — analysis_cache 가 비어있음")
+        return
+    html = render_email_digest(rows)
+    send_report(html, config["email"])
 
 
 def run_scan(args):
@@ -241,15 +277,29 @@ def main():
     if args.start_scheduler:
         from apscheduler.triggers.cron import CronTrigger
         extra_jobs = {
+            "auto_analyze_korea": {
+                "func": lambda: auto_analyze_market("korea"),
+                "trigger": CronTrigger(
+                    hour=16, minute=0, timezone="Asia/Seoul"
+                ),
+                "name": "Korea Auto Analysis",
+            },
+            "auto_analyze_us": {
+                "func": lambda: auto_analyze_market("us"),
+                "trigger": CronTrigger(
+                    hour=6, minute=0, timezone="Asia/Seoul"
+                ),
+                "name": "US Auto Analysis (post-close)",
+            },
             "backfill_daily": {
                 "func": lambda: prediction_history.backfill_all(fetch_fn=fetch_stock_data),
                 "trigger": CronTrigger(
                     hour=18, minute=0, timezone="Asia/Seoul"
                 ),
                 "name": "Daily Prediction Backfill",
-            }
+            },
         }
-        start_scheduler(daily_job, config["schedule"], extra_jobs=extra_jobs)
+        start_scheduler(daily_email_job, config["schedule"], extra_jobs=extra_jobs)
         return
 
     if args.run_now:

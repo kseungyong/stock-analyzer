@@ -4,19 +4,24 @@ from pathlib import Path
 
 
 def pytest_configure(config):
-    """pytest collection 단계 (`import main`)이 일어나기 전에 _DB_PATH를
-    임시 경로로 redirect한다. 그렇지 않으면 main.py 모듈 로드 시 실행되는
-    prediction_history.init_db()가 실제 data/predictions.db를 생성/갱신한다.
+    """pytest collection 단계 (`import main`)이 일어나기 전에
+    prediction_history와 analysis_cache 의 _DB_PATH 를
+    임시 경로로 redirect 한다.
     """
     from src import prediction_history as ph
+    from src import analysis_cache as ac
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="pytest_predictions_"))
-    config._predictions_tmp_dir = tmp_dir  # cleanup 시 참조용
-    ph._DB_PATH = tmp_dir / "predictions.db"
+    config._predictions_tmp_dir = tmp_dir
+    db_path = tmp_dir / "predictions.db"
+    ph._DB_PATH = db_path
+    ac._DB_PATH = db_path  # 동일 파일 공유
+    # 스키마를 미리 초기화 — index 라우트가 analysis_cache.get 을 호출하므로
+    # 모든 테스트가 시작되기 전 테이블이 존재해야 한다.
+    ac.init_db()
 
 
 def pytest_unconfigure(config):
-    """세션 종료 시 임시 디렉토리 정리."""
     import shutil
     tmp_dir = getattr(config, "_predictions_tmp_dir", None)
     if tmp_dir and tmp_dir.exists():

@@ -94,3 +94,39 @@ class TestSendReport:
             with caplog.at_level(logging.ERROR, logger="src.email_sender"):
                 send_report("<html/>", _BASE_CONFIG)
         assert any("네트워크" in r.message for r in caplog.records)
+
+
+class TestRenderEmailDigest:
+    def test_empty_rows_returns_header_only(self):
+        from src.email_sender import render_email_digest
+        html = render_email_digest([])
+        assert "<h1>" in html
+        assert "다이제스트" in html
+
+    def test_single_symbol_row(self, monkeypatch):
+        from src.email_sender import render_email_digest
+        from src import analysis_cache as ac
+        # is_fresh 결정성을 위해 stub
+        monkeypatch.setattr(ac, "is_fresh", lambda row, now: True)
+        rows = [{
+            "cache_key": "AAPL",
+            "market": "us",
+            "result_html": "<p>aapl body</p>",
+            "generated_at": 1715000000,
+            "source": "auto_cron",
+        }]
+        html = render_email_digest(rows)
+        assert "AAPL" in html
+        assert "aapl body" in html
+        assert "🟢" in html
+
+    def test_stale_row_shows_yellow_mark(self, monkeypatch):
+        from src.email_sender import render_email_digest
+        from src import analysis_cache as ac
+        monkeypatch.setattr(ac, "is_fresh", lambda row, now: False)
+        rows = [{
+            "cache_key": "AAPL", "market": "us", "result_html": "<p/>",
+            "generated_at": 1, "source": "auto_cron",
+        }]
+        html = render_email_digest(rows)
+        assert "🟡" in html

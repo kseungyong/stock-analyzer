@@ -55,7 +55,19 @@ python main.py --web --port 3000
 ```bash
 python main.py --start-scheduler
 ```
-`config/settings.yaml`에 설정된 시간(기본 08:30 KST)에 전체 분석 후 이메일 발송합니다.
+
+다음 cron 작업이 등록됩니다:
+
+| 시각 (KST) | 작업 | 설명 |
+|---|---|---|
+| 06:00 | `auto_analyze_us` | 미국 종목 자동분석 → `analysis_cache` UPSERT |
+| 08:30 | `daily_email_job` | `analysis_cache` 의 다이제스트 이메일 발송 (분석 재실행 X) |
+| 16:00 | `auto_analyze_korea` | 한국 종목 자동분석 → `analysis_cache` UPSERT |
+| 18:00 | `backfill_daily` | 예측 이력 actual_close 백필 |
+
+분석 결과는 SQLite `analysis_cache` 테이블에 저장되어 재시작에도 유지됩니다.
+캐시 만료 시각: 한국 종목 KST 09:00, 미국 종목 NYSE 09:30 ET (서머타임 자동 처리).
+대시보드/결과 페이지의 **재분석** 버튼으로 언제든 수동 갱신 가능.
 
 ## 설정
 

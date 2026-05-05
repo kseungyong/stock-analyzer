@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from src.validators import validate_stock_symbol, validate_stock_name, sanitize_
 from src.stock_search import search_stocks
 from src import prediction_history
 from src import backtest as bt
+from src import analysis_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,7 +127,7 @@ def _get_all_stocks(config: dict) -> list[dict]:
 
 
 def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
-    """백그라운드 스레드에서 분석 실행."""
+    """백그라운드 스레드에서 분석 실행. 성공 시 analysis_cache UPSERT."""
     logger.info("분석 시작: job_id=%s symbol=%s name=%s", job_id, symbol, name)
     try:
         from main import analyze_stock
@@ -138,6 +140,11 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
         else:
             html = generate_report([result])
             _jobs_set(job_id, status="done", result_html=html)
+            try:
+                market = _market_of(symbol)
+                analysis_cache.put(symbol, market, html, source="manual")
+            except Exception as e:
+                logger.warning("analysis_cache.put 실패 (job 결과는 정상): %s", e)
             logger.info("분석 완료: job_id=%s symbol=%s", job_id, symbol)
     except Exception as e:
         logger.exception("분석 오류: job_id=%s symbol=%s error=%s", job_id, symbol, e)
@@ -146,8 +153,30 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
         _trim_jobs()
 
 
+def _market_of(symbol: str) -> str:
+    """settings.yaml 에서 symbol 의 시장 (korea/us) 을 찾는다. 없으면 'us' 기본."""
+    config = _load_config()
+    for market, stocks in config.get("stocks", {}).items():
+        for s in stocks:
+            if s["symbol"] == symbol:
+                return market
+    return "us"
+
+
+def _safe_cache_get(cache_key: str) -> dict | None:
+    """analysis_cache.get 의 sqlite 오류를 흡수하고 None 으로 변환한다.
+
+    spec §10 — 캐시 조회 실패 시 캐시 miss 처럼 동작.
+    """
+    try:
+        return analysis_cache.get(cache_key)
+    except Exception as e:
+        logger.warning("analysis_cache.get(%s) 실패: %s", cache_key, e)
+        return None
+
+
 def _run_full_analysis_bg(job_id: str) -> None:
-    """백그라운드 스레드에서 전체 분석 실행."""
+    """백그라운드 스레드에서 전체 분석 실행. 성공 시 analysis_cache.put('ALL')."""
     logger.info("전체 분석 시작: job_id=%s", job_id)
     try:
         from main import run_full_analysis, load_config
@@ -159,6 +188,10 @@ def _run_full_analysis_bg(job_id: str) -> None:
             _jobs_set(job_id, status="error", error="분석 결과 없음")
         else:
             _jobs_set(job_id, status="done", result_html=html)
+            try:
+                analysis_cache.put("ALL", "all", html, source="manual")
+            except Exception as e:
+                logger.warning("analysis_cache.put('ALL') 실패: %s", e)
             logger.info("전체 분석 완료: job_id=%s", job_id)
     except Exception as e:
         logger.exception("전체 분석 오류: job_id=%s error=%s", job_id, e)
@@ -694,6 +727,101 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# stock view helpers
+# ---------------------------------------------------------------------------
+
+def _format_kst(unix_ts: int) -> str:
+    """unix epoch → 'YYYY-MM-DD HH:MM KST' 표시."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.fromtimestamp(unix_ts, tz=ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
+
+
+def _render_meta_bar(row: dict, fresh: bool, name: str) -> str:
+    """결과 페이지 상단 메타바 카드."""
+    when = _format_kst(row["generated_at"])
+    if fresh:
+        bar = f'<div class="alert alert-info">🟢 분석 시각: {when} · {row["source"]}</div>'
+    else:
+        bar = (
+            f'<div class="alert alert-error" style="background:#FEF3C7;color:#92400E;border-color:#FDE68A;">'
+            f'🟡 분석 시각: {when} · {row["source"]}<br>'
+            f'⚠️ 마지막 분석 후 시장이 다시 마감되었습니다. 재분석을 권장합니다.'
+            f'</div>'
+        )
+    reanalyze_form = f'''
+    <form method="post" action="/analyze/{escape(row["cache_key"])}" style="margin:8px 0 16px 0;">
+      {_csrf_input()}
+      <input type="hidden" name="return_to" value="stock">
+      <button type="submit" class="btn btn-amber">🔄 재분석</button>
+    </form>'''
+    return f'<div class="page-header"><h1>{escape(name)} ({escape(row["cache_key"])})</h1></div>{bar}{reanalyze_form}'
+
+
+def _render_no_cache(symbol: str, name: str) -> str:
+    """캐시 miss 안내 페이지."""
+    return f'''
+    <div class="page-header"><h1>{escape(name)} ({escape(symbol)})</h1></div>
+    <div class="alert alert-info">⚪ 분석 이력이 없습니다. 아래 버튼으로 첫 분석을 시작하세요.</div>
+    <form method="post" action="/analyze/{escape(symbol)}" style="margin:16px 0;">
+      {_csrf_input()}
+      <input type="hidden" name="return_to" value="stock">
+      <button type="submit" class="btn btn-primary">▶ 분석 시작</button>
+    </form>'''
+
+
+def _render_stock_with_overlay(symbol: str, name: str, row: dict | None, job_id: str) -> str:
+    """`?job=<id>` 진행 중인 분석에 대해 캐시(흐리게) + 오버레이 + 폴링 JS 렌더."""
+    job = _jobs_snapshot()[job_id]
+    started = job["started_at"]
+    when_html = f'<span style="color:var(--slate-500); font-size:0.9em;">시작 {started}</span>'
+
+    if row is not None:
+        when = _format_kst(row["generated_at"])
+        meta = (
+            f'<div class="alert alert-info">🟢 분석 시각: {when} · {row["source"]} · '
+            f'<strong>🔄 재분석 중...</strong> {when_html}</div>'
+        )
+        existing = f'<div class="card result-frame" style="opacity:0.5;pointer-events:none;">{row["result_html"]}</div>'
+    else:
+        meta = (
+            f'<div class="alert alert-info">🔄 첫 분석 진행 중 — {when_html}</div>'
+        )
+        existing = ""
+
+    overlay = '''
+    <div style="text-align:center;padding:32px;background:var(--blue-50);border:1px solid var(--blue-100);border-radius:10px;margin:16px 0;">
+      <div class="spinner"></div>
+      <p style="margin-top:12px;font-weight:600;color:var(--blue-800);">⏳ 새 분석 진행 중 (예상 30~60초)</p>
+    </div>
+    '''
+
+    polling_js = f'''
+    <script>
+    (() => {{
+      const jobId = "{job_id}";
+      const tick = async () => {{
+        try {{
+          const res = await fetch(`/api/jobs/${{jobId}}`);
+          if (res.status === 404) {{ window.location.replace(window.location.pathname); return; }}
+          const data = await res.json();
+          if (data.status === "done" || data.status === "error") {{
+            window.location.replace(window.location.pathname);
+            return;
+          }}
+        }} catch (_) {{ }}
+        setTimeout(tick, 2000);
+      }};
+      setTimeout(tick, 2000);
+    }})();
+    </script>'''
+
+    title = f'<div class="page-header"><h1>{escape(name)} ({escape(symbol)})</h1></div>'
+    body = f"{title}{meta}{overlay}{existing}"
+    return _page(f"{name} 재분석 중", body, polling_js)
+
+
+# ---------------------------------------------------------------------------
 # routes
 # ---------------------------------------------------------------------------
 
@@ -724,6 +852,7 @@ def index():
 
     # 종목 카드
     cards = []
+    now_ts = int(time.time())
     for s in stocks:
         badge_cls = "badge-korea" if s["market"] == "korea" else "badge-us"
         market_label = "한국" if s["market"] == "korea" else "미국"
@@ -731,10 +860,37 @@ def index():
             j["symbol"] == s["symbol"] and j["status"] == "running"
             for j in jobs.values()
         )
-        if is_running:
-            analyze_btn = f'<span class="btn btn-primary btn-sm btn-disabled">{_ICON_PLAY} 분석 중</span>'
+
+        # 신선도 줄
+        cache_row = _safe_cache_get(s["symbol"])
+        if cache_row is None:
+            freshness_line = '<div style="font-size:0.78rem;color:var(--slate-500);">⚪ 분석 이력 없음</div>'
+            primary_btn = f'''
+            <form method="post" action="/analyze/{s["symbol"]}" style="display:inline; margin:0;">
+              {_csrf_input()}
+              <input type="hidden" name="return_to" value="jobs">
+              <button type="submit" class="btn btn-primary btn-sm">{_ICON_PLAY} 분석 시작</button>
+            </form>'''
         else:
-            analyze_btn = f'<a class="btn btn-primary btn-sm" href="/analyze/{s["symbol"]}">{_ICON_PLAY} 분석</a>'
+            fresh = analysis_cache.is_fresh(cache_row, now_ts)
+            when = _format_kst(cache_row["generated_at"])
+            mark = "🟢" if fresh else "🟡"
+            color = "var(--green-600)" if fresh else "#92400E"
+            freshness_line = f'<div style="font-size:0.78rem;color:{color};">{mark} {when}</div>'
+            primary_btn = f'<a class="btn btn-primary btn-sm" href="/stock/{s["symbol"]}">{_ICON_PLAY} 결과 보기</a>'
+
+        if is_running:
+            primary_btn = f'<span class="btn btn-primary btn-sm btn-disabled">{_ICON_PLAY} 분석 중</span>'
+
+        # 캐시 있을 때만 별도 재분석 아이콘 (카드 클릭 → /jobs 흐름)
+        reanalyze_btn = ""
+        if cache_row is not None and not is_running:
+            reanalyze_btn = f'''
+            <form method="post" action="/analyze/{s["symbol"]}" style="display:inline; margin:0;">
+              {_csrf_input()}
+              <input type="hidden" name="return_to" value="jobs">
+              <button type="submit" class="btn btn-amber btn-sm" title="재분석">🔄</button>
+            </form>'''
 
         cards.append(f"""
         <div class="stock-card">
@@ -745,8 +901,10 @@ def index():
             </div>
             <span class="badge {badge_cls}">{market_label}</span>
           </div>
+          {freshness_line}
           <div class="stock-card-actions">
-            {analyze_btn}
+            {primary_btn}
+            {reanalyze_btn}
             <form method="post" action="/stocks/delete" style="margin:0;"
                   onsubmit="return confirm('{escape(s['name'])} 종목을 삭제하시겠습니까?');">
               {_csrf_input()}
@@ -828,9 +986,10 @@ def index():
     return _page("대시보드", body, refresh_script + _AUTOCOMPLETE_JS)
 
 
-@app.route("/analyze/<path:symbol>")
+@app.route("/analyze/<path:symbol>", methods=["POST"])
 def analyze(symbol: str):
-    # 입력 검증
+    _csrf_validate()
+
     symbol = sanitize_stock_symbol(symbol)
     if not validate_stock_symbol(symbol):
         return _page("오류", f'<div class="card"><p style="color:#dc3545;">유효하지 않은 심볼: {symbol}</p></div>')
@@ -856,7 +1015,76 @@ def analyze(symbol: str):
     t = threading.Thread(target=_run_analysis_bg, args=(job_id, symbol, name), daemon=True)
     t.start()
 
+    return_to = request.form.get("return_to", "jobs")
+    if return_to not in ("jobs", "stock"):
+        return_to = "jobs"
+    if return_to == "stock":
+        return redirect(f"/stock/{symbol}?job={job_id}", code=303)
     return redirect(f"/jobs/{job_id}", code=303)
+
+
+@app.route("/stock/<path:symbol>")
+def stock_view(symbol: str):
+    symbol = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(symbol):
+        abort(400)
+
+    name = symbol
+    for s in _get_all_stocks(_load_config()):
+        if s["symbol"] == symbol:
+            name = s["name"]
+            break
+
+    row = _safe_cache_get(symbol)
+    job_id = request.args.get("job", "").strip()
+
+    # 진행 중 → 오버레이 + 폴링 (Task 11)
+    job = _jobs_snapshot().get(job_id) if job_id else None
+    if job and job["status"] == "running":
+        return _render_stock_with_overlay(symbol, name, row, job_id)
+
+    # job_id 가 있는데 종료 상태 → PRG redirect 로 쿼리 제거
+    if job_id and (not job or job["status"] != "running"):
+        return redirect(f"/stock/{symbol}", code=303)
+
+    if row is None:
+        return _page(f"{name} 분석", _render_no_cache(symbol, name))
+
+    fresh = analysis_cache.is_fresh(row, int(time.time()))
+    body = _render_meta_bar(row, fresh, name) + f'<div class="card result-frame">{row["result_html"]}</div>'
+    return _page(f"{name} 분석 결과", body)
+
+
+@app.route("/stock/all")
+def stock_all_view():
+    row = _safe_cache_get("ALL")
+    if row is None:
+        body = f'''
+        <div class="page-header"><h1>전체 종목 분석</h1></div>
+        <div class="alert alert-info">⚪ 전체 분석 이력이 없습니다.</div>
+        <form method="post" action="/analyze-all" style="margin:16px 0;">
+          {_csrf_input()}
+          <button type="submit" class="btn btn-amber">▶ 전체 분석 시작</button>
+        </form>'''
+        return _page("전체 분석", body)
+
+    fresh = analysis_cache.is_fresh(row, int(time.time()))
+    when = _format_kst(row["generated_at"])
+    if fresh:
+        bar = f'<div class="alert alert-info">🟢 분석 시각: {when} · {row["source"]}</div>'
+    else:
+        bar = (
+            f'<div class="alert alert-error" style="background:#FEF3C7;color:#92400E;border-color:#FDE68A;">'
+            f'🟡 분석 시각: {when} · {row["source"]}<br>⚠️ 일부 종목이 만료되었습니다. 재분석 권장.'
+            f'</div>'
+        )
+    reanalyze = f'''
+    <form method="post" action="/analyze-all" style="margin:8px 0 16px 0;">
+      {_csrf_input()}
+      <button type="submit" class="btn btn-amber">🔄 전체 재분석</button>
+    </form>'''
+    body = f'<div class="page-header"><h1>전체 종목 분석</h1></div>{bar}{reanalyze}<div class="card result-frame">{row["result_html"]}</div>'
+    return _page("전체 분석", body)
 
 
 @app.route("/analyze-all", methods=["POST"])
