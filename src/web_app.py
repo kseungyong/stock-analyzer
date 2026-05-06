@@ -1796,6 +1796,46 @@ def api_signal(symbol: str):
     return jsonify(_signal_json(row))
 
 
+@app.route("/api/universe/<path:symbol>", methods=["POST"])
+def api_universe_post(symbol: str):
+    """auto-trader 등 외부 시스템용 — universe (settings.yaml) 에 종목 추가.
+
+    JSON body: {"name": str, "market": "korea"|"us"}
+    멱등: 이미 있으면 200 + {"added": false}, 신규면 201 + {"added": true}.
+    CSRF 면제 (stateless API), 기존 _basic_auth_gate 그대로 적용.
+
+    Spec: ~/Projects/auto-trader/docs/superpowers/specs/2026-05-07-universe-push-design.md
+    """
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    market = (body.get("market") or "").strip()
+
+    sym = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(sym):
+        return jsonify({"error": "invalid_symbol", "symbol": symbol}), 400
+    if market not in ("korea", "us"):
+        return jsonify({"error": "invalid_market", "market": market}), 400
+    if not name:
+        name = sym  # fallback
+    if not validate_stock_name(name):
+        return jsonify({"error": "invalid_name", "name": name}), 400
+
+    with _config_lock:
+        config = _load_config()
+        config.setdefault("stocks", {}).setdefault(market, [])
+        existing = {s["symbol"] for s in config["stocks"][market]}
+        if sym in existing:
+            return jsonify({
+                "added": False, "symbol": sym, "market": market,
+            }), 200
+        config["stocks"][market].append({"symbol": sym, "name": name})
+        _save_config(config)
+
+    return jsonify({
+        "added": True, "symbol": sym, "name": name, "market": market,
+    }), 201
+
+
 @app.route("/backtest/<path:symbol>", methods=["POST"])
 def start_backtest(symbol: str):
     """백테스트 실행 트리거. 동시 1개로 제한."""

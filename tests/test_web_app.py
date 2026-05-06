@@ -1287,3 +1287,62 @@ class TestApiSignal:
         data = resp.get_json()
         assert data["tech"] == {"signal": "매수", "score": 2}
         assert data["bnf"] == {"signal": None, "score": None}
+
+
+class TestApiUniverse:
+    """POST /api/universe/<symbol> — auto-trader 등 외부 시스템용 등록 endpoint.
+
+    Spec: ~/Projects/auto-trader/docs/superpowers/specs/2026-05-07-universe-push-design.md
+    """
+
+    def test_post_new_symbol_returns_201(self, client, config_file):
+        """신규 심볼 → 201 + {added: true}, settings.yaml 에 append."""
+        resp = client.post(
+            "/api/universe/MSFT",
+            json={"name": "Microsoft", "market": "us"},
+        )
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data == {
+            "added": True, "symbol": "MSFT", "name": "Microsoft", "market": "us",
+        }
+        # yaml 갱신 확인
+        cfg = yaml.safe_load(config_file.read_text())
+        symbols = [s["symbol"] for s in cfg["stocks"]["us"]]
+        assert "MSFT" in symbols
+
+    def test_post_existing_symbol_returns_200(self, client, config_file):
+        """이미 있는 AAPL → 200 + {added: false}, yaml 변동 없음."""
+        before = yaml.safe_load(config_file.read_text())
+        resp = client.post(
+            "/api/universe/AAPL",
+            json={"name": "Apple", "market": "us"},
+        )
+        assert resp.status_code == 200
+        assert resp.get_json()["added"] is False
+        after = yaml.safe_load(config_file.read_text())
+        assert before == after
+
+    def test_invalid_symbol_returns_400(self, client):
+        resp = client.post(
+            "/api/universe/<script>",
+            json={"name": "x", "market": "us"},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "invalid_symbol"
+
+    def test_invalid_market_returns_400(self, client):
+        resp = client.post(
+            "/api/universe/MSFT",
+            json={"name": "Microsoft", "market": "invalid"},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "invalid_market"
+
+    def test_no_csrf_required(self, client, config_file):
+        """JSON POST 가 CSRF 토큰 없이 통과 (기존 /stocks/add 의 form 과 분리)."""
+        resp = client.post(
+            "/api/universe/NVDA",
+            json={"name": "NVIDIA", "market": "us"},
+        )
+        assert resp.status_code == 201  # CSRF 거부면 400 에러 났을 것
