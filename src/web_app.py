@@ -1336,6 +1336,21 @@ def index():
           <a href="/jobs" style="margin-left:auto;">작업 내역 보기 →</a>
         </div>"""
 
+    # 캐시 미리 일괄 fetch (정렬 + 카드 빌드 양쪽에서 사용)
+    cache_by_symbol = {s["symbol"]: _safe_cache_get(s["symbol"]) for s in stocks}
+
+    # BNF score 내림차순 정렬 (NULL/캐시 없음 → 맨 뒤, 같은 score 면 symbol 사전순)
+    def _bnf_sort_key(stock: dict) -> tuple[int, int, str]:
+        cache = cache_by_symbol.get(stock["symbol"])
+        if cache is None:
+            return (1, 0, stock["symbol"])
+        score = cache.get("bnf_signal_score")
+        if score is None:
+            return (1, 0, stock["symbol"])
+        return (0, -int(score), stock["symbol"])
+
+    stocks = sorted(stocks, key=_bnf_sort_key)
+
     # 종목 카드
     cards = []
     now_ts = int(time.time())
@@ -1348,7 +1363,7 @@ def index():
         )
 
         # 신선도 줄
-        cache_row = _safe_cache_get(s["symbol"])
+        cache_row = cache_by_symbol.get(s["symbol"])
         if cache_row is None:
             freshness_line = '<div style="font-size:0.78rem;color:var(--slate-500);">⚪ 분석 이력 없음</div>'
             primary_btn = f'''
