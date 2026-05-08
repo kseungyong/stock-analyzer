@@ -38,7 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_analysis_cache_market
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH, isolation_level=None)
+    # isolation_level=DEFERRED (기본) — BEGIN/COMMIT 정상 동작 + WAL 일관성 보장.
+    # 이전 isolation_level=None (autocommit) 은 gunicorn worker + scheduler cron
+    # 동시 write 시 transaction boundary 부재로 race 위험.
+    conn = sqlite3.connect(_DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn

@@ -221,12 +221,24 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
 
 
 def _market_of(symbol: str) -> str:
-    """settings.yaml 에서 symbol 의 시장 (korea/us) 을 찾는다. 없으면 'us' 기본."""
+    """settings.yaml 에서 symbol 의 시장 (korea/us) 을 찾는다. 없으면 heuristic 적용.
+
+    .KS / .KQ / 6자리 숫자 → korea, 그 외 → us.
+    이전에는 universe 외 종목도 silent us 처리 → 한국 종목 yfinance 잘못 fetch 위험.
+    """
     config = _load_config()
     for market, stocks in config.get("stocks", {}).items():
         for s in stocks:
             if s["symbol"] == symbol:
                 return market
+    # Heuristic fallback (수동 분석 trigger 등 universe 외 종목)
+    if symbol.endswith((".KS", ".KQ")):
+        return "korea"
+    if symbol.isdigit() and len(symbol) == 6:
+        return "korea"
+    logger.warning(
+        "_market_of: %s not in universe, defaulting to 'us' (heuristic)", symbol,
+    )
     return "us"
 
 
@@ -1339,15 +1351,19 @@ def index():
     # 캐시 미리 일괄 fetch (정렬 + 카드 빌드 양쪽에서 사용)
     cache_by_symbol = {s["symbol"]: _safe_cache_get(s["symbol"]) for s in stocks}
 
-    # BNF score 내림차순 정렬 (NULL/캐시 없음 → 맨 뒤, 같은 score 면 symbol 사전순)
+    # BNF score 내림차순 정렬.
+    # tier 0: 분석 완료 + score 있음 (high score 가 위로)
+    # tier 1: 분석 완료 + score=NULL (BNF 미완료)
+    # tier 2: 캐시 없음 (분석 안 됨)
+    # 같은 tier 면 symbol 사전순.
     def _bnf_sort_key(stock: dict) -> tuple[int, int, str]:
         cache = cache_by_symbol.get(stock["symbol"])
         if cache is None:
-            return (1, 0, stock["symbol"])
+            return (2, 0, stock["symbol"])  # 분석 안 됨 — 가장 아래
         score = cache.get("bnf_signal_score")
         if score is None:
-            return (1, 0, stock["symbol"])
-        return (0, -int(score), stock["symbol"])
+            return (1, 0, stock["symbol"])  # BNF 미완료
+        return (0, -int(score), stock["symbol"])  # BNF score 있음
 
     stocks = sorted(stocks, key=_bnf_sort_key)
 
@@ -1912,9 +1928,12 @@ def api_universe_delete(symbol: str):
         config = _load_config()
         config.setdefault("stocks", {})
         markets = [market_hint] if market_hint else ["korea", "us"]
+        # 누락된 market 키 명시 초기화 — 이후 push 시 silent fail 방지
+        for m in markets:
+            config["stocks"].setdefault(m, [])
         removed_market: str | None = None
         for m in markets:
-            entries = config["stocks"].get(m, []) or []
+            entries = config["stocks"][m]
             new_entries = [s for s in entries if s["symbol"] != sym]
             if len(new_entries) != len(entries):
                 config["stocks"][m] = new_entries

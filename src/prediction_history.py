@@ -53,7 +53,9 @@ CREATE INDEX IF NOT EXISTS idx_pred_backtest_id
 
 def _connect() -> sqlite3.Connection:
     """DB 연결 + PRAGMA 설정."""
-    conn = sqlite3.connect(_DB_PATH, isolation_level=None)
+    # isolation_level=DEFERRED (기본) — BEGIN/COMMIT 정상 동작.
+    # 이전 isolation_level=None (autocommit) 제거 — analysis_cache 와 일관.
+    conn = sqlite3.connect(_DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")

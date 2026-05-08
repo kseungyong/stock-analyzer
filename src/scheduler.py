@@ -29,7 +29,13 @@ def start_scheduler(
         minute=config.get("minute", 30),
         timezone=tz,
     )
-    scheduler.add_job(job_func, trigger, id="daily_report", name="Daily Stock Report")
+    # max_instances=1 + misfire_grace_time=0: 이전 cron 이 다음 trigger 시점까지
+    # 안 끝나면 새 실행 skip (overlap 방지). settings.yaml + analysis_cache 동시
+    # write race 차단.
+    scheduler.add_job(
+        job_func, trigger, id="daily_report", name="Daily Stock Report",
+        max_instances=1, misfire_grace_time=300,
+    )
 
     if extra_jobs:
         for job_id, job in extra_jobs.items():
@@ -38,6 +44,8 @@ def start_scheduler(
                 job["trigger"],
                 id=job_id,
                 name=job.get("name", job_id),
+                max_instances=1,
+                misfire_grace_time=300,
             )
 
     logger.info(

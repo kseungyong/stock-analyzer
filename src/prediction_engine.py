@@ -238,12 +238,21 @@ class PredictionEngine:
             return None
 
     def _save_cache(self, key: str, data: dict) -> None:
-        """결과를 디스크에 원자적으로 저장한다 (tmp → rename)."""
+        """결과를 디스크에 원자적으로 저장한다 (tmp → fsync → rename).
+
+        fsync 로 데이터 디스크 flush 후 rename — power loss 시 0-byte
+        partial file 방지. tmp.replace 자체는 rename 만 atomic, 실 데이터는
+        write buffer 에만 있을 수 있음.
+        """
+        import os
         try:
             path = self._safe_cache_path(key)
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
-            tmp.write_bytes(pickle.dumps(data))
+            with open(tmp, "wb") as f:
+                f.write(pickle.dumps(data))
+                f.flush()
+                os.fsync(f.fileno())
             tmp.replace(path)  # 원자적 rename
             logger.info("캐시 저장: %s", path.name)
         except Exception as e:
