@@ -1,6 +1,15 @@
 """세션 전체 fixture — 테스트 시 실제 predictions.db 오염 방지."""
+import os
 import tempfile
 from pathlib import Path
+
+# web_app.py 의 module-level load_dotenv() 가 .env 의 ENABLE_BASIC_AUTH=1 을
+# os.environ 에 주입 → 모든 테스트 요청이 401 UNAUTHORIZED. import 전 차단.
+# 운영 환경에는 영향 없음 (서버는 .env 가 정상 작동).
+os.environ.pop("ENABLE_BASIC_AUTH", None)
+os.environ.pop("BASIC_AUTH_USERS", None)
+os.environ.pop("BASIC_AUTH_USERNAME", None)
+os.environ.pop("BASIC_AUTH_PASSWORD", None)
 
 
 def pytest_configure(config):
