@@ -1403,7 +1403,7 @@ def index():
             prefix="BNF ",
         )
         cards.append(f"""
-        <div class="stock-card">
+        <div class="stock-card" data-name="{escape(s['name']).lower()}" data-symbol="{escape(s['symbol']).lower()}">
           <div class="stock-card-header">
             <div class="stock-card-info">
               <h3>{escape(s['name'])}</h3>
@@ -1489,15 +1489,54 @@ def index():
     <div class="toolbar">
       <div class="toolbar-left">
         <span style="font-size:0.875rem;color:var(--slate-500);">
-          총 <strong style="color:var(--slate-900);">{len(stocks)}</strong>개 종목
+          <span id="card-count">{len(stocks)}</span>개 종목
         </span>
+        <input type="text" id="card-search" list="card-suggestions"
+               placeholder="🔍 종목명/심볼 검색..." autocomplete="off"
+               style="margin-left:1rem; padding:0.4rem 0.75rem; border:1.5px solid var(--slate-300); border-radius:7px; min-width:240px; font-size:0.875rem;">
+        <button type="button" id="card-search-clear"
+                style="margin-left:0.25rem; padding:0.4rem 0.6rem; border:none; background:transparent; color:var(--slate-500); cursor:pointer; font-size:1rem;"
+                title="검색 초기화">×</button>
+        <datalist id="card-suggestions">
+          {''.join(f'<option value="{escape(s["name"])}"></option>' for s in stocks)}
+        </datalist>
       </div>
       {analyze_all_form}
     </div>
     {stock_section}"""
 
+    card_filter_js = """
+<script>
+(function() {
+  const input = document.getElementById('card-search');
+  const clearBtn = document.getElementById('card-search-clear');
+  const counter = document.getElementById('card-count');
+  const grid = document.querySelector('.stock-grid');
+  if (!input || !grid) return;
+  const cards = Array.from(grid.querySelectorAll('.stock-card'));
+  const total = cards.length;
+
+  function applyFilter() {
+    const q = input.value.trim().toLowerCase();
+    let visible = 0;
+    cards.forEach(c => {
+      const name = (c.dataset.name || '').toLowerCase();
+      const sym = (c.dataset.symbol || '').toLowerCase();
+      const match = !q || name.includes(q) || sym.includes(q);
+      c.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    if (counter) counter.textContent = q ? (visible + '/' + total) : total;
+  }
+  input.addEventListener('input', applyFilter);
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    input.value = ''; applyFilter(); input.focus();
+  });
+})();
+</script>
+"""
     refresh_script = "<script>setTimeout(()=>location.reload(),5000);</script>" if running else ""
-    return _page("대시보드", body, refresh_script + _AUTOCOMPLETE_JS)
+    return _page("대시보드", body, refresh_script + _AUTOCOMPLETE_JS + card_filter_js)
 
 
 @app.route("/analyze/<path:symbol>", methods=["POST"])
