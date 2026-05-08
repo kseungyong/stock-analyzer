@@ -4,8 +4,14 @@ import tempfile
 from pathlib import Path
 
 # web_app.py 의 module-level load_dotenv() 가 .env 의 ENABLE_BASIC_AUTH=1 을
-# os.environ 에 주입 → 모든 테스트 요청이 401 UNAUTHORIZED. import 전 차단.
-# 운영 환경에는 영향 없음 (서버는 .env 가 정상 작동).
+# os.environ 에 재주입 → 모든 테스트 요청이 401 UNAUTHORIZED.
+# 단순 pop 만으로는 부족 — load_dotenv 자체를 no-op 으로 monkeypatch (test only).
+import sys
+import types
+_noop_dotenv = types.ModuleType("dotenv")
+_noop_dotenv.load_dotenv = lambda *args, **kwargs: False  # type: ignore[attr-defined]
+sys.modules.setdefault("dotenv", _noop_dotenv)
+# 이미 import 된 경우도 보호 — pop env (재주입 후라도 web_app._basic_auth_on 평가 전이면 효과 있음)
 os.environ.pop("ENABLE_BASIC_AUTH", None)
 os.environ.pop("BASIC_AUTH_USERS", None)
 os.environ.pop("BASIC_AUTH_USERNAME", None)
