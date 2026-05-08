@@ -1346,3 +1346,22 @@ class TestApiUniverse:
             json={"name": "NVIDIA", "market": "us"},
         )
         assert resp.status_code == 201  # CSRF 거부면 400 에러 났을 것
+
+    def test_delete_existing_returns_200(self, client, config_file):
+        """이미 있는 AAPL 제거 → 200 + {removed: true}, yaml 갱신."""
+        resp = client.delete("/api/universe/AAPL")
+        assert resp.status_code == 200
+        assert resp.get_json()["removed"] is True
+        cfg = yaml.safe_load(config_file.read_text())
+        symbols = [s["symbol"] for s in cfg["stocks"]["us"]]
+        assert "AAPL" not in symbols
+
+    def test_delete_missing_returns_200(self, client, config_file):
+        """없는 심볼 제거 → 200 + {removed: false} (멱등)."""
+        resp = client.delete("/api/universe/NEVERHERE")
+        assert resp.status_code == 200
+        assert resp.get_json()["removed"] is False
+
+    def test_delete_invalid_symbol_returns_400(self, client):
+        resp = client.delete("/api/universe/<script>")
+        assert resp.status_code == 400

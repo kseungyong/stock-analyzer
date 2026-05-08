@@ -1890,6 +1890,48 @@ def api_universe_post(symbol: str):
     }), 201
 
 
+@app.route("/api/universe/<path:symbol>", methods=["DELETE"])
+def api_universe_delete(symbol: str):
+    """auto-trader 등 외부 시스템용 — universe 에서 종목 제거 (멱등).
+
+    Idempotent: 이미 없으면 200 + {"removed": false}, 제거 시 200 + {"removed": true}.
+    CSRF 면제 (stateless API), 기존 _basic_auth_gate 적용.
+    market 자동 탐색 — `?market=korea|us` query 옵션, 없으면 양쪽 모두 검사.
+
+    Spec: ~/Projects/auto-trader/docs/superpowers/specs/2026-05-07-universe-push-design.md (#4)
+    """
+    sym = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(sym):
+        return jsonify({"error": "invalid_symbol", "symbol": symbol}), 400
+
+    market_hint = (request.args.get("market") or "").strip()
+    if market_hint and market_hint not in ("korea", "us"):
+        return jsonify({"error": "invalid_market", "market": market_hint}), 400
+
+    with _config_lock:
+        config = _load_config()
+        config.setdefault("stocks", {})
+        markets = [market_hint] if market_hint else ["korea", "us"]
+        removed_market: str | None = None
+        for m in markets:
+            entries = config["stocks"].get(m, []) or []
+            new_entries = [s for s in entries if s["symbol"] != sym]
+            if len(new_entries) != len(entries):
+                config["stocks"][m] = new_entries
+                removed_market = m
+                break
+        if removed_market is None:
+            return jsonify({
+                "removed": False, "symbol": sym,
+                "message": "universe 에 없음",
+            }), 200
+        _save_config(config)
+
+    return jsonify({
+        "removed": True, "symbol": sym, "market": removed_market,
+    }), 200
+
+
 @app.route("/backtest/<path:symbol>", methods=["POST"])
 def start_backtest(symbol: str):
     """백테스트 실행 트리거. 동시 1개로 제한."""
