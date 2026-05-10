@@ -1363,21 +1363,31 @@ def index():
     # 캐시 미리 일괄 fetch (정렬 + 카드 빌드 양쪽에서 사용)
     cache_by_symbol = {s["symbol"]: _safe_cache_get(s["symbol"]) for s in stocks}
 
-    # BNF score 내림차순 정렬.
-    # tier 0: 분석 완료 + score 있음 (high score 가 위로)
-    # tier 1: 분석 완료 + score=NULL (BNF 미완료)
+    # Composite 정렬 — Tech + BNF + Pattern×0.5 (Pattern range ±10 정규화).
+    # tier 0: 분석 완료 + 어떤 score 라도 있음 (composite 내림차순)
+    # tier 1: 분석 완료 + 모든 score NULL
     # tier 2: 캐시 없음 (분석 안 됨)
-    # 같은 tier 면 symbol 사전순.
-    def _bnf_sort_key(stock: dict) -> tuple[int, int, str]:
+    # 같은 composite 면 symbol 사전순.
+    def _composite_score(cache: dict | None) -> float:
+        if cache is None:
+            return 0.0
+        tech = cache.get("signal_score") or 0
+        bnf = cache.get("bnf_signal_score") or 0
+        pat = cache.get("pattern_score") or 0
+        return float(tech) + float(bnf) + float(pat) * 0.5
+
+    def _composite_sort_key(stock: dict) -> tuple[int, float, str]:
         cache = cache_by_symbol.get(stock["symbol"])
         if cache is None:
-            return (2, 0, stock["symbol"])  # 분석 안 됨 — 가장 아래
-        score = cache.get("bnf_signal_score")
-        if score is None:
-            return (1, 0, stock["symbol"])  # BNF 미완료
-        return (0, -int(score), stock["symbol"])  # BNF score 있음
+            return (2, 0.0, stock["symbol"])
+        has_any = (cache.get("signal_score") is not None
+                   or cache.get("bnf_signal_score") is not None
+                   or cache.get("pattern_score") is not None)
+        if not has_any:
+            return (1, 0.0, stock["symbol"])
+        return (0, -_composite_score(cache), stock["symbol"])
 
-    stocks = sorted(stocks, key=_bnf_sort_key)
+    stocks = sorted(stocks, key=_composite_sort_key)
 
     # 종목 카드
     cards = []
@@ -1450,6 +1460,27 @@ def index():
                     )
             except (ValueError, KeyError):
                 pass
+
+        # Composite 배지 — Tech + BNF + Pattern×0.5
+        composite_badge_html = ""
+        if cache_row is not None:
+            comp = _composite_score(cache_row)
+            if comp >= 5:
+                comp_color = "#16A34A"   # 진초록 — 강한 매수
+            elif comp >= 1:
+                comp_color = "#65A30D"   # 연초록 — 약매수
+            elif comp <= -5:
+                comp_color = "#DC2626"   # 진빨강 — 강한 매도
+            elif comp <= -1:
+                comp_color = "#EA580C"   # 연빨강 — 약매도
+            else:
+                comp_color = "#64748B"   # 회색 — 관망
+            sign = "+" if comp >= 0 else ""
+            composite_badge_html = (
+                f'<span class="badge" style="background:{comp_color};color:#fff;font-weight:600;" '
+                f'title="Tech+BNF+Pattern×0.5">📊 {sign}{comp:.1f}</span>'
+            )
+
         cards.append(f"""
         <div class="stock-card" data-name="{escape(s['name']).lower()}" data-symbol="{escape(s['symbol']).lower()}">
           <div class="stock-card-header">
@@ -1458,6 +1489,7 @@ def index():
               <div class="symbol">{escape(s['symbol'])}</div>
             </div>
             <div class="stock-card-badges">
+              {composite_badge_html}
               {signal_badge_html}
               {bnf_badge_html}
               {pattern_badge_html}
