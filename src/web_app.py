@@ -2466,12 +2466,30 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
         except (ValueError, KeyError):
             pass
 
-    notes_html = (
-        f'<div style="font-size:0.85rem;color:#92400E;background:#FEF3C7;'
-        f'border-left:3px solid #F59E0B;padding:6px 10px;margin-top:8px;'
-        f'border-radius:4px;">📝 {escape(notes)}</div>'
-        if notes else ""
-    )
+    # data-* 로 symbol/notes 전달 — JS 가 escape 안전하게 prompt 호출
+    btn_data = f'data-edit-notes data-symbol="{escape(sym)}" data-notes="{escape(notes)}"'
+    if notes:
+        notes_html = (
+            f'<div style="font-size:0.85rem;color:#92400E;background:#FEF3C7;'
+            f'border-left:3px solid #F59E0B;padding:6px 10px;margin-top:8px;'
+            f'border-radius:4px;display:flex;justify-content:space-between;'
+            f'align-items:center;gap:8px;">'
+            f'<span>📝 {escape(notes)}</span>'
+            f'<button type="button" {btn_data} '
+            f'style="background:transparent;border:none;cursor:pointer;'
+            f'color:#92400E;font-size:0.85rem;padding:2px 6px;" '
+            f'title="메모 수정">✏️</button>'
+            f'</div>'
+        )
+    else:
+        notes_html = (
+            f'<div style="margin-top:6px;">'
+            f'<button type="button" {btn_data} '
+            f'style="background:transparent;border:1px dashed var(--slate-300);'
+            f'color:var(--slate-500);font-size:0.78rem;padding:4px 10px;'
+            f'border-radius:4px;cursor:pointer;">📝 메모 추가</button>'
+            f'</div>'
+        )
 
     return f"""
     <div class="stock-card" data-symbol="{escape(sym).lower()}" data-name="{escape(name).lower()}">
@@ -2648,6 +2666,28 @@ def portfolio_view():
           <p>아직 등록된 보유 종목이 없습니다. 위 폼으로 추가해보세요.</p>
         </div>"""
 
+    notes_form = f"""
+    <form id="notes-edit-form" method="post" action="/portfolio/update" style="display:none;">
+      {_csrf_input()}
+      <input type="hidden" name="symbol" id="notes-edit-symbol">
+      <input type="hidden" name="notes" id="notes-edit-notes">
+    </form>"""
+
+    notes_js = """
+<script>
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-edit-notes]');
+  if (!btn) return;
+  const symbol = btn.dataset.symbol;
+  const current = btn.dataset.notes || '';
+  const next = window.prompt('메모를 입력하세요 (빈 값이면 제거)', current);
+  if (next === null) return;
+  document.getElementById('notes-edit-symbol').value = symbol;
+  document.getElementById('notes-edit-notes').value = next;
+  document.getElementById('notes-edit-form').submit();
+});
+</script>"""
+
     body = f"""
     <div class="page-header">
       <h1>포트폴리오</h1>
@@ -2657,8 +2697,9 @@ def portfolio_view():
     {stats_card}
     {add_form}
     {sort_bar}
-    {cards_html}"""
-    return _page("포트폴리오", body, _AUTOCOMPLETE_JS)
+    {cards_html}
+    {notes_form}"""
+    return _page("포트폴리오", body, _AUTOCOMPLETE_JS + notes_js)
 
 
 @app.route("/portfolio/add", methods=["POST"])
