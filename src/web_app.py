@@ -2784,9 +2784,9 @@ def portfolio_view():
       <input type="hidden" name="qty" disabled>
       <input type="hidden" name="notes" disabled>
     </form>
-    <div id="edit-modal" role="dialog" aria-labelledby="edit-modal-title" hidden
+    <div id="edit-modal" role="dialog" aria-labelledby="edit-modal-title"
          style="position:fixed;inset:0;background:rgba(15,23,42,0.55);
-         display:flex;align-items:center;justify-content:center;z-index:1000;
+         display:none;align-items:center;justify-content:center;z-index:1000;
          padding:16px;">
       <div style="background:#fff;border-radius:8px;max-width:420px;width:100%;
                   padding:20px;box-shadow:0 12px 32px rgba(0,0,0,0.2);">
@@ -2836,11 +2836,11 @@ def portfolio_view():
     }
     inputEl.value = current || '';
     errorEl.textContent = '';
-    modal.hidden = false;
+    modal.style.display = 'flex';
     setTimeout(() => { inputEl.focus(); inputEl.select(); }, 0);
   }
   function closeModal() {
-    modal.hidden = true;
+    modal.style.display = 'none';
     pending = null;
   }
   function submitUpdate(symbol, field, value) {
@@ -2870,7 +2870,7 @@ def portfolio_view():
   cancelBtn.addEventListener('click', closeModal);
   modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
   document.addEventListener('keydown', (e) => {
-    if (modal.hidden) return;
+    if (modal.style.display === 'none' || !modal.style.display) return;
     if (e.key === 'Escape') closeModal();
     else if (e.key === 'Enter') { e.preventDefault(); tryCommit(); }
   });
