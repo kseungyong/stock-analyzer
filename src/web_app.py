@@ -109,6 +109,14 @@ def _basic_auth_gate():
     )
 
 
+def _current_user() -> str:
+    """현재 사용자 식별 — Basic Auth 면 username, OFF 면 'default'."""
+    if not _basic_auth_on:
+        return "default"
+    auth = request.authorization
+    return auth.username if auth and auth.username else "default"
+
+
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
 
 # 백그라운드 작업 저장소: {job_id: {status, symbol, name, result_html, error, started_at}}
@@ -940,6 +948,17 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
         '<a class="topbar-link" href="/logout" style="opacity:0.75;">로그아웃</a>'
         if _basic_auth_on else ""
     )
+    user_badge = ""
+    try:
+        user = _current_user()
+        n = portfolio_db.count_holdings(user)
+        user_badge = (
+            f'<span class="topbar-link" '
+            f'style="opacity:0.85;font-size:0.85rem;cursor:default;" '
+            f'title="현재 사용자">👤 {escape(user)} · {n}종목</span>'
+        )
+    except Exception:
+        pass  # request 컨텍스트 없을 때 (예: 에러 페이지) 건너뜀
     return f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -958,6 +977,7 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
     <a class="topbar-link" href="/">대시보드</a>
     <a class="topbar-link" href="/portfolio">포트폴리오</a>
     <a class="topbar-link" href="/jobs">작업 내역</a>
+    {user_badge}
     {logout_link}
   </div>
 </nav>
@@ -1736,8 +1756,8 @@ def stock_view(symbol: str):
 
 
 def _render_portfolio_banner(symbol: str, row: dict) -> str:
-    """분석 페이지 상단 — 이 종목이 portfolio 에 있으면 평균가/손익 배너."""
-    h = portfolio_db.get_holding_with_pnl(symbol)
+    """분석 페이지 상단 — 현재 사용자가 이 종목 보유 중이면 평균가/손익 배너."""
+    h = portfolio_db.get_holding_with_pnl(_current_user(), symbol)
     if h is None:
         return ""
     market = row.get("market") or _market_of(symbol)
@@ -2625,7 +2645,8 @@ def portfolio_view():
         if error_msg else ""
     )
 
-    holdings = portfolio_db.list_holdings_with_pnl()
+    user = _current_user()
+    holdings = portfolio_db.list_holdings_with_pnl(user)
 
     def sort_fn(h: dict) -> tuple:
         tier_no_pnl = 0 if h.get("pnl_pct") is not None else 1
@@ -2924,11 +2945,12 @@ def portfolio_add():
         qty = int(qty_s)
     except ValueError:
         return redirect(url_for("portfolio_view", error="평균가/수량이 숫자여야 합니다."), code=303)
+    user = _current_user()
     try:
-        portfolio_db.add_holding(symbol, avg_price, qty, notes=notes)
+        portfolio_db.add_holding(user, symbol, avg_price, qty, notes=notes)
     except ValueError as e:
         return redirect(url_for("portfolio_view", error=str(e)), code=303)
-    logger.info("portfolio.add %s avg=%s qty=%s", symbol, avg_price, qty)
+    logger.info("portfolio.add user=%s %s avg=%s qty=%s", user, symbol, avg_price, qty)
     return redirect(url_for("portfolio_view"), code=303)
 
 
@@ -2951,8 +2973,9 @@ def portfolio_update():
             return redirect(url_for("portfolio_view", error="수량 숫자 오류"), code=303)
     if "notes" in request.form:
         kwargs["notes"] = request.form["notes"]
+    user = _current_user()
     try:
-        portfolio_db.update_holding(symbol, **kwargs)
+        portfolio_db.update_holding(user, symbol, **kwargs)
     except ValueError as e:
         return redirect(url_for("portfolio_view", error=str(e)), code=303)
     return redirect(url_for("portfolio_view"), code=303)
@@ -2963,8 +2986,9 @@ def portfolio_delete():
     _csrf_validate()
     symbol = request.form.get("symbol", "").strip()
     if symbol:
-        portfolio_db.remove_holding(symbol)
-        logger.info("portfolio.delete %s", symbol)
+        user = _current_user()
+        portfolio_db.remove_holding(user, symbol)
+        logger.info("portfolio.delete user=%s %s", user, symbol)
     return redirect(url_for("portfolio_view"), code=303)
 
 

@@ -1,9 +1,10 @@
-"""포트폴리오 (보유 종목) 영속화.
+"""포트폴리오 (보유 종목) 영속화 — 사용자별 격리.
 
-Spec: docs/superpowers/specs/2026-05-10-portfolio-page-design.md
+Spec: docs/superpowers/specs/2026-05-10-portfolio-multiuser-design.md
 
-테이블: portfolio (symbol PK, avg_price, qty, added_at, notes)
+테이블: portfolio((username, symbol) 복합 PK, avg_price, qty, added_at, notes)
 JOIN with analysis_cache 로 last_close + 시그널 + 패턴 한 번에 lookup.
+analysis_cache 는 사용자 무관 (분석 결과는 공유).
 """
 from __future__ import annotations
 
@@ -22,13 +23,18 @@ _writer_lock = threading.Lock()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS portfolio (
-    symbol     TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    symbol     TEXT NOT NULL,
     avg_price  REAL NOT NULL,
     qty        INTEGER NOT NULL DEFAULT 0,
     added_at   INTEGER NOT NULL,
-    notes      TEXT
+    notes      TEXT,
+    PRIMARY KEY (username, symbol)
 );
 """
+
+# 마이그레이션 시 username 미보유 row 들을 이 사용자에게 할당
+_LEGACY_OWNER = "admin"
 
 
 def _connect() -> sqlite3.Connection:
@@ -38,11 +44,42 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_to_multiuser(conn: sqlite3.Connection) -> None:
+    """기존 portfolio(symbol PK) → portfolio(username, symbol) 복합 PK.
+
+    멱등: username 컬럼 이미 있으면 no-op.
+    SQLite 는 PK 변경을 ALTER 로 못해서 rename → recreate → copy → drop 패턴.
+    """
+    cur = conn.execute("PRAGMA table_info(portfolio)")
+    cols = {row[1] for row in cur.fetchall()}
+    if not cols or "username" in cols:
+        return  # 신규 (cols 비어있음 — 첫 실행) 또는 이미 마이그레이션됨
+
+    logger.info("portfolio 다중 사용자 마이그레이션 시작 — owner=%s", _LEGACY_OWNER)
+    conn.execute("BEGIN")
+    try:
+        conn.execute("ALTER TABLE portfolio RENAME TO portfolio_old")
+        conn.executescript(_SCHEMA)
+        conn.execute(
+            """INSERT INTO portfolio(username, symbol, avg_price, qty, added_at, notes)
+               SELECT ?, symbol, avg_price, qty, added_at, notes FROM portfolio_old""",
+            (_LEGACY_OWNER,),
+        )
+        moved = conn.execute("SELECT COUNT(*) FROM portfolio").fetchone()[0]
+        conn.execute("DROP TABLE portfolio_old")
+        conn.execute("COMMIT")
+        logger.info("마이그레이션 완료 — %d 종목을 %s 에 할당", moved, _LEGACY_OWNER)
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def init_db() -> None:
-    """portfolio 테이블 생성. 멱등."""
+    """portfolio 테이블 생성 + 단일사용자→다중사용자 마이그레이션. 멱등."""
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _writer_lock:
         with closing(_connect()) as conn:
+            _migrate_to_multiuser(conn)
             conn.executescript(_SCHEMA)
     logger.info("portfolio DB 초기화 완료: %s", _DB_PATH)
 
@@ -55,7 +92,8 @@ def _validate(avg_price: float, qty: int) -> None:
 
 
 def add_holding(
-    symbol: str, avg_price: float, qty: int, notes: str | None = None,
+    username: str, symbol: str, avg_price: float, qty: int,
+    notes: str | None = None,
 ) -> bool:
     """추가 또는 갱신. 새로 추가됐으면 True, 기존 갱신이면 False."""
     _validate(avg_price, qty)
@@ -63,18 +101,19 @@ def add_holding(
     with _writer_lock:
         with closing(_connect()) as conn:
             existing = conn.execute(
-                "SELECT 1 FROM portfolio WHERE symbol = ?", (symbol,),
+                "SELECT 1 FROM portfolio WHERE username = ? AND symbol = ?",
+                (username, symbol),
             ).fetchone()
             conn.execute("BEGIN")
             try:
                 conn.execute(
-                    """INSERT INTO portfolio(symbol, avg_price, qty, added_at, notes)
-                       VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(symbol) DO UPDATE SET
+                    """INSERT INTO portfolio(username, symbol, avg_price, qty, added_at, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(username, symbol) DO UPDATE SET
                          avg_price = excluded.avg_price,
                          qty       = excluded.qty,
                          notes     = excluded.notes""",
-                    (symbol, float(avg_price), int(qty), now, notes),
+                    (username, symbol, float(avg_price), int(qty), now, notes),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -83,14 +122,15 @@ def add_holding(
     return existing is None
 
 
-def remove_holding(symbol: str) -> bool:
+def remove_holding(username: str, symbol: str) -> bool:
     """제거. 존재했으면 True, 없었으면 False."""
     with _writer_lock:
         with closing(_connect()) as conn:
             conn.execute("BEGIN")
             try:
                 cur = conn.execute(
-                    "DELETE FROM portfolio WHERE symbol = ?", (symbol,),
+                    "DELETE FROM portfolio WHERE username = ? AND symbol = ?",
+                    (username, symbol),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -100,10 +140,15 @@ def remove_holding(symbol: str) -> bool:
 
 
 def update_holding(
-    symbol: str, *, avg_price: float | None = None,
-    qty: int | None = None, notes: str | None = None,
+    username: str, symbol: str, *,
+    avg_price: float | None = None,
+    qty: int | None = None,
+    notes: str | None = None,
 ) -> bool:
-    """부분 업데이트. 존재했으면 True, 없었으면 False."""
+    """부분 업데이트. 존재했으면 True, 없었으면 False.
+
+    다른 사용자 종목은 WHERE 절 미일치로 자동 noop → False.
+    """
     sets: list[str] = []
     vals: list[object] = []
     if avg_price is not None:
@@ -121,13 +166,14 @@ def update_holding(
         vals.append(notes)
     if not sets:
         return True
-    vals.append(symbol)
+    vals.extend([username, symbol])
     with _writer_lock:
         with closing(_connect()) as conn:
             conn.execute("BEGIN")
             try:
                 cur = conn.execute(
-                    f"UPDATE portfolio SET {', '.join(sets)} WHERE symbol = ?",
+                    f"UPDATE portfolio SET {', '.join(sets)} "
+                    f"WHERE username = ? AND symbol = ?",
                     vals,
                 )
                 conn.execute("COMMIT")
@@ -137,11 +183,12 @@ def update_holding(
             return cur.rowcount > 0
 
 
-def list_holdings() -> list[dict]:
+def list_holdings(username: str) -> list[dict]:
     with closing(_connect()) as conn:
         rows = conn.execute(
             "SELECT symbol, avg_price, qty, added_at, notes "
-            "FROM portfolio ORDER BY symbol",
+            "FROM portfolio WHERE username = ? ORDER BY symbol",
+            (username,),
         ).fetchall()
     return [
         {"symbol": r[0], "avg_price": float(r[1]), "qty": int(r[2]),
@@ -150,13 +197,16 @@ def list_holdings() -> list[dict]:
     ]
 
 
-def count_holdings() -> int:
+def count_holdings(username: str) -> int:
     with closing(_connect()) as conn:
-        row = conn.execute("SELECT COUNT(*) FROM portfolio").fetchone()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM portfolio WHERE username = ?",
+            (username,),
+        ).fetchone()
     return int(row[0]) if row else 0
 
 
-def list_holdings_with_pnl() -> list[dict]:
+def list_holdings_with_pnl(username: str) -> list[dict]:
     """portfolio JOIN analysis_cache — 손익 + 시그널 + 패턴 한 번에.
 
     last_close NULL (분석 안 됨) 면 pnl_pct/pnl_abs NULL.
@@ -171,7 +221,9 @@ def list_holdings_with_pnl() -> list[dict]:
                       c.generated_at
                FROM portfolio p
                LEFT JOIN analysis_cache c ON p.symbol = c.cache_key
+               WHERE p.username = ?
                ORDER BY p.symbol""",
+            (username,),
         ).fetchall()
     result = []
     for r in rows:
@@ -205,9 +257,9 @@ def list_holdings_with_pnl() -> list[dict]:
     return result
 
 
-def get_holding_with_pnl(symbol: str) -> dict | None:
+def get_holding_with_pnl(username: str, symbol: str) -> dict | None:
     """단일 종목 — list_holdings_with_pnl 의 단일판."""
-    for h in list_holdings_with_pnl():
+    for h in list_holdings_with_pnl(username):
         if h["symbol"] == symbol:
             return h
     return None
