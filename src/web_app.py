@@ -1395,8 +1395,8 @@ def index():
 
     stocks = sorted(stocks, key=_composite_sort_key)
 
-    # 종목 카드
-    cards = []
+    # 종목 카드 (시장별 그룹)
+    cards_by_market: dict[str, list[str]] = {"korea": [], "us": []}
     now_ts = int(time.time())
     for s in stocks:
         badge_cls = "badge-korea" if s["market"] == "korea" else "badge-us"
@@ -1487,7 +1487,7 @@ def index():
                 f'title="Tech+BNF+Pattern×0.5">📊 {sign}{comp:.1f}</span>'
             )
 
-        cards.append(f"""
+        cards_by_market.setdefault(s["market"], []).append(f"""
         <div class="stock-card" data-name="{escape(s['name']).lower()}" data-symbol="{escape(s['symbol']).lower()}">
           <div class="stock-card-header">
             <div class="stock-card-info">
@@ -1558,8 +1558,20 @@ def index():
       <button type="submit" class="btn btn-amber">{_ICON_PLAY} 전체 종목 일괄 분석</button>
     </form>"""
 
-    # 종목 없을 때 빈 상태
-    stock_section = f'<div class="stock-grid">{"".join(cards)}</div>' if cards else """
+    # 시장별 섹션 (한국 → 미국 순서)
+    sections = []
+    for market, label in (("korea", "🇰🇷 한국"), ("us", "🇺🇸 미국")):
+        market_cards = cards_by_market.get(market) or []
+        if not market_cards:
+            continue
+        sections.append(
+            f'<h2 class="market-section-header" data-market="{market}" '
+            f'style="margin:24px 0 8px 0;font-size:1.05rem;color:var(--slate-700);">'
+            f'{label} <span class="market-count" style="color:var(--slate-500);'
+            f'font-weight:normal;">({len(market_cards)}종목)</span></h2>'
+            f'<div class="stock-grid" data-market="{market}">{"".join(market_cards)}</div>'
+        )
+    stock_section = "".join(sections) if sections else """
     <div class="empty-state">
       <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>
       <p>등록된 종목이 없습니다. 종목을 추가해보세요.</p>
@@ -1598,10 +1610,11 @@ def index():
   const input = document.getElementById('card-search');
   const clearBtn = document.getElementById('card-search-clear');
   const counter = document.getElementById('card-count');
-  const grid = document.querySelector('.stock-grid');
-  if (!input || !grid) return;
-  const cards = Array.from(grid.querySelectorAll('.stock-card'));
+  const grids = Array.from(document.querySelectorAll('.stock-grid'));
+  if (!input || grids.length === 0) return;
+  const cards = grids.flatMap(g => Array.from(g.querySelectorAll('.stock-card')));
   const total = cards.length;
+  const headers = Array.from(document.querySelectorAll('.market-section-header'));
 
   function applyFilter() {
     const q = input.value.trim().toLowerCase();
@@ -1612,6 +1625,20 @@ def index():
       const match = !q || name.includes(q) || sym.includes(q);
       c.style.display = match ? '' : 'none';
       if (match) visible++;
+    });
+    // 시장별 헤더 표시/숨김 + 카운트 갱신
+    headers.forEach(h => {
+      const market = h.dataset.market;
+      const grid = document.querySelector('.stock-grid[data-market="' + market + '"]');
+      if (!grid) return;
+      const visibleHere = grid.querySelectorAll('.stock-card:not([style*="display: none"])').length;
+      h.style.display = visibleHere > 0 ? '' : 'none';
+      grid.style.display = visibleHere > 0 ? '' : 'none';
+      const cnt = h.querySelector('.market-count');
+      if (cnt) {
+        const totalHere = grid.querySelectorAll('.stock-card').length;
+        cnt.textContent = q ? '(' + visibleHere + '/' + totalHere + '종목)' : '(' + totalHere + '종목)';
+      }
     });
     if (counter) counter.textContent = q ? (visible + '/' + total) : total;
   }
