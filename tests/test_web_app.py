@@ -541,7 +541,7 @@ class TestSafeCacheGetAndReturnToAllowlist:
         assert resp.headers["Location"].startswith("/jobs/")
 
 
-class TestBasicAuthGate:
+class TestSessionAuthGate:
     def test_no_auth_allowed_when_disabled(self, client, monkeypatch):
         """ENABLE_BASIC_AUTH 미설정 (기본값) → 인증 없이 모든 요청 허용."""
         import src.web_app as wa
@@ -549,54 +549,71 @@ class TestBasicAuthGate:
         resp = client.get("/")
         assert resp.status_code == 200
 
-    def test_returns_401_without_auth_when_enabled(self, client, monkeypatch):
+    def test_unauthenticated_get_redirects_to_login(self, client, monkeypatch):
         import src.web_app as wa
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
         resp = client.get("/")
-        assert resp.status_code == 401
-        assert "WWW-Authenticate" in resp.headers
-        assert resp.headers["WWW-Authenticate"].startswith("Basic")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
 
-    def test_returns_401_on_wrong_password(self, client, monkeypatch):
+    def test_unauthenticated_post_returns_401(self, client, monkeypatch):
         import src.web_app as wa
-        from base64 import b64encode
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
-        creds = b64encode(b"admin:wrong").decode()
-        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        resp = client.post("/portfolio/add", data={})
         assert resp.status_code == 401
 
-    def test_returns_200_on_correct_credentials(self, client, monkeypatch):
+    def test_login_with_correct_credentials_sets_session(self, client, monkeypatch):
         import src.web_app as wa
-        from base64 import b64encode
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
-        creds = b64encode(b"admin:secret").decode()
-        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
-        assert resp.status_code == 200
+        resp = client.post("/login",
+                           data={"username": "admin", "password": "secret", "next": "/"},
+                           follow_redirects=False)
+        assert resp.status_code == 302
+        # 세션 설정됐으니 후속 요청 200
+        resp2 = client.get("/")
+        assert resp2.status_code == 200
+
+    def test_login_wrong_password_returns_401(self, client, monkeypatch):
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
+        resp = client.post("/login",
+                           data={"username": "admin", "password": "wrong"})
+        assert resp.status_code == 401
+        assert "올바르지".encode() in resp.data
 
     def test_multi_users_each_authenticate_independently(self, client, monkeypatch):
-        """여러 사용자 — 각자 자기 비밀번호로 통과, 다른 사람 비밀번호는 실패."""
+        """여러 사용자 — 각자 자기 비밀번호로 로그인 통과, 다른 사람 비밀번호는 실패."""
         import src.web_app as wa
-        from base64 import b64encode
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {
             "admin": "pw1", "sykim": "pw2", "guest": "pw3",
         })
-        # 각 사용자 자기 비번 → 200
         for user, pw in [("admin", "pw1"), ("sykim", "pw2"), ("guest", "pw3")]:
-            creds = b64encode(f"{user}:{pw}".encode()).decode()
-            resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
-            assert resp.status_code == 200, f"{user} 인증 실패"
+            resp = client.post("/login",
+                               data={"username": user, "password": pw, "next": "/"})
+            assert resp.status_code == 302, f"{user} 로그인 실패"
         # admin 이 sykim 비번 사용 → 401
-        creds = b64encode(b"admin:pw2").decode()
-        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        resp = client.post("/login", data={"username": "admin", "password": "pw2"})
         assert resp.status_code == 401
         # 모르는 사용자 → 401
-        creds = b64encode(b"unknown:any").decode()
-        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        resp = client.post("/login", data={"username": "unknown", "password": "any"})
         assert resp.status_code == 401
+
+    def test_open_redirect_blocked(self, client, monkeypatch):
+        """next 파라미터로 외부 도메인 redirect 시도 → / 로 정규화."""
+        import src.web_app as wa
+        monkeypatch.setattr(wa, "_basic_auth_on", True)
+        monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
+        resp = client.post("/login",
+                           data={"username": "admin", "password": "secret",
+                                 "next": "//evil.com/x"},
+                           follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["Location"] == "/"
 
 
 class TestParseBasicAuthUsers:
@@ -638,36 +655,34 @@ class TestParseBasicAuthUsers:
 
 
 class TestLogout:
-    def test_logout_returns_401_with_logout_realm(self, client, monkeypatch):
-        """/logout 은 401 + realm='logout' + Clear-Site-Data 응답 (Basic Auth 캐시 무효화)."""
+    def test_logout_clears_session_and_redirects_to_login(self, client, monkeypatch):
         import src.web_app as wa
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
-        from base64 import b64encode
-        creds = b64encode(b"admin:secret").decode()
-        resp = client.get("/logout", headers={"Authorization": f"Basic {creds}"})
-        assert resp.status_code == 401
-        assert resp.headers.get("WWW-Authenticate") == 'Basic realm="logout"'
-        assert resp.headers.get("Clear-Site-Data") == '"*"'
-        assert "로그아웃".encode() in resp.data
+        # 로그인 후 /logout
+        client.post("/login", data={"username": "admin", "password": "secret"})
+        resp = client.get("/logout", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+        # 후속 요청 → 다시 /login redirect (세션 비워졌음)
+        resp2 = client.get("/", follow_redirects=False)
+        assert resp2.status_code == 302
+        assert "/login" in resp2.headers["Location"]
 
     def test_logout_bypasses_auth_gate(self, client, monkeypatch):
-        """/logout 은 인증 안 된 사용자도 접근 가능 (안내 페이지 보여줌)."""
+        """/logout 은 인증 안 된 상태에서도 접근 가능 (gate 가 우회)."""
         import src.web_app as wa
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
-        # 자격 없이 /logout 접근 — gate 가 우회 → 라우트 자체가 401 응답
-        resp = client.get("/logout")
-        assert resp.status_code == 401
-        assert "로그아웃".encode() in resp.data  # 안내 본문 도달함
+        resp = client.get("/logout", follow_redirects=False)
+        assert resp.status_code == 302  # 401 안 떨어짐, 그냥 /login 으로 redirect
 
     def test_logout_link_in_topbar_when_auth_enabled(self, client, monkeypatch):
         import src.web_app as wa
         monkeypatch.setattr(wa, "_basic_auth_on", True)
         monkeypatch.setattr(wa, "_basic_auth_users", {"admin": "secret"})
-        from base64 import b64encode
-        creds = b64encode(b"admin:secret").decode()
-        resp = client.get("/", headers={"Authorization": f"Basic {creds}"})
+        client.post("/login", data={"username": "admin", "password": "secret"})
+        resp = client.get("/")
         assert b'href="/logout"' in resp.data
         assert "로그아웃".encode() in resp.data
 

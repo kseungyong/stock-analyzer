@@ -88,33 +88,29 @@ if _basic_auth_on and not _basic_auth_users:
 
 
 @app.before_request
-def _basic_auth_gate():
-    """ENABLE_BASIC_AUTH=1 일 때 모든 요청에 Basic Auth 검증.
+def _session_auth_gate():
+    """ENABLE_BASIC_AUTH=1 일 때 모든 요청에 세션 검증.
 
-    /logout 만 우회 — 라우트 자체가 401 + Clear-Site-Data 로 캐시 무효화한다.
+    환경변수 이름은 호환성으로 ENABLE_BASIC_AUTH 유지하지만 인증 메커니즘은
+    Flask session 기반. /login (GET, POST) 와 /logout 은 우회.
     """
     if not _basic_auth_on:
         return None
-    if request.path == "/logout":
+    if request.path in ("/login", "/logout"):
         return None
-    auth = request.authorization
-    if auth is not None:
-        expected = _basic_auth_users.get(auth.username)
-        if expected is not None and secrets.compare_digest(auth.password or "", expected):
-            return None
-    return Response(
-        "Authentication required",
-        401,
-        {"WWW-Authenticate": 'Basic realm="stock-analyzer"'},
-    )
+    if session.get("username") in _basic_auth_users:
+        return None
+    # AJAX/POST 면 401, 그 외 GET 은 /login 로 redirect
+    if request.method != "GET" or request.path.startswith("/api/"):
+        return Response("Authentication required", 401)
+    return redirect(url_for("login_view", next=request.path))
 
 
 def _current_user() -> str:
-    """현재 사용자 식별 — Basic Auth 면 username, OFF 면 'default'."""
+    """현재 사용자 식별 — 인증 ON 이면 session.username, OFF 면 'default'."""
     if not _basic_auth_on:
         return "default"
-    auth = request.authorization
-    return auth.username if auth and auth.username else "default"
+    return session.get("username") or "default"
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
@@ -1318,47 +1314,84 @@ def _render_stock_with_overlay(symbol: str, name: str, row: dict | None, job_id:
 # routes
 # ---------------------------------------------------------------------------
 
-@app.route("/logout")
-def logout():
-    """Basic Auth 로그아웃 — 401 + Clear-Site-Data 로 브라우저 자격 캐시 무효화 시도.
-
-    Basic Auth 는 stateless 라 진짜 server-side logout 은 불가능.
-    realm 을 평소 'stock-analyzer' 와 다른 'logout' 으로 응답해 일부 브라우저가
-    자격 캐시를 invalidate 하도록 유도. Chrome/Firefox 는 Clear-Site-Data 도 인식.
-    Safari 등은 탭 닫기까지 자격이 유지될 수 있음 (브라우저 한계).
-    """
-    body = """<!DOCTYPE html>
+def _login_page(error: str = "", next_url: str = "/") -> str:
+    err_html = (
+        f'<div style="background:#FEE2E2;color:#991B1B;padding:10px 14px;'
+        f'border-radius:6px;margin-bottom:14px;font-size:0.9rem;">{escape(error)}</div>'
+        if error else ""
+    )
+    safe_next = escape(next_url)
+    return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8">
-<title>로그아웃 — Stock Analyzer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>로그인 — Stock Analyzer</title>
 <style>
-body{font-family:-apple-system,'Fira Sans',sans-serif;background:#F8FAFC;color:#0F172A;
-     min-height:100vh;display:flex;align-items:center;justify-content:center;}
-.card{background:#fff;padding:48px 56px;border-radius:12px;
-      box-shadow:0 4px 6px rgba(0,0,0,0.07);text-align:center;max-width:420px;}
-h1{color:#1E3A8A;font-size:1.4rem;margin-bottom:12px;}
-p{color:#64748B;margin:8px 0;line-height:1.6;}
-a{display:inline-block;margin-top:20px;color:#2563EB;text-decoration:none;
-  border:1.5px solid #2563EB;padding:8px 20px;border-radius:7px;font-weight:600;}
-a:hover{background:#EFF6FF;}
+body{{font-family:-apple-system,'Fira Sans',sans-serif;background:#F8FAFC;color:#0F172A;
+     min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0;}}
+.card{{background:#fff;padding:36px 40px;border-radius:12px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.08);max-width:360px;width:100%;
+      box-sizing:border-box;}}
+h1{{color:#1E3A8A;font-size:1.4rem;margin:0 0 18px 0;text-align:center;}}
+label{{display:block;font-size:0.85rem;color:#475569;margin:10px 0 4px 0;}}
+input{{width:100%;padding:10px 12px;border:1.5px solid #CBD5E1;
+      border-radius:6px;font-size:1rem;box-sizing:border-box;}}
+input:focus{{outline:none;border-color:#2563EB;}}
+button{{width:100%;margin-top:18px;padding:11px;background:#2563EB;color:#fff;
+       border:none;border-radius:6px;font-size:1rem;font-weight:600;cursor:pointer;}}
+button:hover{{background:#1D4ED8;}}
 </style></head><body>
 <div class="card">
-  <h1>로그아웃되었습니다</h1>
-  <p>다른 사용자로 로그인하려면 아래 버튼을 누르세요.</p>
-  <p style="font-size:0.82rem;color:#94A3B8;">
-    일부 브라우저는 탭을 닫아야 자격이 완전히 사라집니다.
-  </p>
-  <a href="/">다시 로그인</a>
+  <h1>📊 Stock Analyzer</h1>
+  {err_html}
+  <form method="post" action="/login">
+    <input type="hidden" name="next" value="{safe_next}">
+    <label for="username">사용자명</label>
+    <input id="username" name="username" autocomplete="username" autofocus required>
+    <label for="password">비밀번호</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">로그인</button>
+  </form>
 </div>
 </body></html>"""
-    return Response(
-        body,
-        401,
-        {
-            "WWW-Authenticate": 'Basic realm="logout"',
-            "Clear-Site-Data": '"*"',
-            "Content-Type": "text/html; charset=utf-8",
-        },
-    )
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_view():
+    if not _basic_auth_on:
+        return redirect(url_for("index"))
+    next_url = request.values.get("next", "/")
+    # next URL 검증 — 외부 도메인 redirect 방지 (open redirect 보안)
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+    if request.method == "GET":
+        # 이미 로그인 상태면 즉시 next 로
+        if session.get("username") in _basic_auth_users:
+            return redirect(next_url)
+        return _login_page(next_url=next_url)
+    # POST
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    expected = _basic_auth_users.get(username)
+    if expected is None or not secrets.compare_digest(password, expected):
+        logger.info("login failed user=%s", username)
+        return _login_page(error="사용자명 또는 비밀번호가 올바르지 않습니다.",
+                           next_url=next_url), 401
+    session["username"] = username
+    session.permanent = True
+    logger.info("login success user=%s", username)
+    return redirect(next_url)
+
+
+@app.route("/logout")
+def logout():
+    """세션 삭제 → 로그인 페이지."""
+    user = session.get("username")
+    session.clear()
+    if user:
+        logger.info("logout user=%s", user)
+    if not _basic_auth_on:
+        return redirect(url_for("index"))
+    return redirect(url_for("login_view"))
 
 
 @app.route("/")
