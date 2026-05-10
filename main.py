@@ -60,6 +60,8 @@ def load_config() -> dict:
 # 모듈 로드 시점에 1회 — DB 파일/스키마 보장
 prediction_history.init_db()
 analysis_cache.init_db()
+from src import portfolio as _portfolio_init
+_portfolio_init.init_db()
 
 
 def get_all_stocks(config: dict) -> list[dict]:
@@ -138,6 +140,7 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
             "name": name,
             "symbol": symbol,
             "df": df,
+            "last_close": float(df["Close"].iloc[-1]),
             "signal": signal,
             "bnf_signal": bnf_signal,
             "prediction": prediction,
@@ -224,6 +227,7 @@ def auto_analyze_market(market: str) -> None:
                 pattern_json=_json.dumps(patterns, ensure_ascii=False) if patterns else None,
                 pattern_signal=pat_summary.get("signal"),
                 pattern_score=pat_summary.get("score"),
+                last_close=result.get("last_close"),
             )
             success += 1
         except Exception as e:

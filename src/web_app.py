@@ -26,6 +26,9 @@ from src.stock_search import search_stocks
 from src import prediction_history
 from src import backtest as bt
 from src import analysis_cache
+from src import portfolio as portfolio_db
+
+portfolio_db.init_db()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,6 +218,7 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
                     pattern_json=_json.dumps(patterns, ensure_ascii=False) if patterns else None,
                     pattern_signal=pat_summary.get("signal"),
                     pattern_score=pat_summary.get("score"),
+                    last_close=result.get("last_close"),
                 )
             except Exception as e:
                 logger.warning("analysis_cache.put 실패 (job 결과는 정상): %s", e)
@@ -299,6 +303,7 @@ def _run_full_analysis_bg(job_id: str) -> None:
                     pattern_json=_json.dumps(patterns, ensure_ascii=False) if patterns else None,
                     pattern_signal=pat_summary.get("signal"),
                     pattern_score=pat_summary.get("score"),
+                    last_close=r.get("last_close"),
                 )
                 cached += 1
             except Exception as e:
@@ -951,6 +956,7 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
   </a>
   <div class="topbar-nav">
     <a class="topbar-link" href="/">대시보드</a>
+    <a class="topbar-link" href="/portfolio">포트폴리오</a>
     <a class="topbar-link" href="/jobs">작업 내역</a>
     {logout_link}
   </div>
@@ -2348,6 +2354,341 @@ def stocks_delete():
         _save_config(config)
 
     return redirect(url_for("index"), code=303)
+
+
+# ---------------------------------------------------------------------------
+# Portfolio (보유 종목 1:1 매칭)
+# ---------------------------------------------------------------------------
+
+def _composite_score_row(row: dict) -> float:
+    """portfolio row 의 Tech+BNF+Pattern×0.5. NULL 안전."""
+    tech = row.get("signal_score") or 0
+    bnf = row.get("bnf_signal_score") or 0
+    pat = row.get("pattern_score") or 0
+    return float(tech) + float(bnf) + float(pat) * 0.5
+
+
+def _format_signed(value: float | None, market: str | None,
+                   *, currency: bool = False) -> str:
+    if value is None:
+        return "—"
+    sign = "+" if value >= 0 else ""
+    if currency:
+        return f"{sign}{_format_price(value, market or 'us')}"
+    return f"{sign}{value:.2f}%"
+
+
+def _portfolio_card(h: dict, now_ts: int) -> str:
+    sym = h["symbol"]
+    market = h.get("market") or _market_of(sym)
+    avg = h["avg_price"]
+    qty = h["qty"]
+    last = h.get("last_close")
+    pnl_pct = h.get("pnl_pct")
+    pnl_abs = h.get("pnl_abs")
+    notes = h.get("notes") or ""
+    badge_cls = "badge-korea" if market == "korea" else "badge-us"
+    market_label = "한국" if market == "korea" else "미국"
+
+    if pnl_pct is None:
+        pnl_color = "var(--slate-500)"
+        pnl_text = "분석 필요"
+    elif pnl_pct >= 0:
+        pnl_color = "#16A34A"
+        pnl_text = f"+{pnl_pct:.2f}% ({_format_signed(pnl_abs, market, currency=True)})"
+    else:
+        pnl_color = "#DC2626"
+        pnl_text = f"{pnl_pct:.2f}% ({_format_signed(pnl_abs, market, currency=True)})"
+
+    avg_str = _format_price(avg, market)
+    last_str = _format_price(last, market) if last is not None else "—"
+    eval_amount = (last * qty) if last is not None else None
+    eval_str = _format_price(eval_amount, market) if eval_amount is not None else "—"
+
+    # 신선도 + composite
+    fresh_line = ""
+    if h.get("generated_at"):
+        try:
+            fake_row = {
+                "market": market,
+                "generated_at": h["generated_at"],
+                "cache_key": sym,
+            }
+            fresh = analysis_cache.is_fresh(fake_row, now_ts)
+            mark = "🟢" if fresh else "🟡"
+            color = "var(--green-600)" if fresh else "#92400E"
+            fresh_line = (
+                f'<div style="font-size:0.75rem;color:{color};">'
+                f'{mark} {_format_kst(h["generated_at"])}</div>'
+            )
+        except Exception:
+            pass
+    else:
+        fresh_line = (
+            '<div style="font-size:0.75rem;color:var(--slate-500);">'
+            '⚪ 분석 이력 없음</div>'
+        )
+
+    composite = _composite_score_row(h)
+    if composite >= 5:
+        comp_color = "#16A34A"
+    elif composite >= 1:
+        comp_color = "#65A30D"
+    elif composite <= -5:
+        comp_color = "#DC2626"
+    elif composite <= -1:
+        comp_color = "#EA580C"
+    else:
+        comp_color = "#64748B"
+    comp_sign = "+" if composite >= 0 else ""
+
+    signal_badge_html = _render_signal_badge(
+        h.get("signal_value"), h.get("signal_score"),
+    )
+    bnf_badge_html = _render_signal_badge(
+        h.get("bnf_signal_value"), h.get("bnf_signal_score"), prefix="BNF ",
+    )
+    pattern_badge_html = ""
+    if h.get("pattern_signal"):
+        try:
+            import json as _json
+            pj = _json.loads(h.get("pattern_json") or "{}")
+            tops = (pj.get("summary") or {}).get("top_patterns") or []
+            psig = h["pattern_signal"]
+            pcolor = {"매수": "#16A34A", "매도": "#DC2626",
+                      "사지마": "#D97706", "팔지마": "#D97706"}.get(psig, "#64748B")
+            tops_text = " · ".join(tops[:2]) if tops else ""
+            label = f"📈 {psig}: {tops_text}" if tops_text else f"📈 {psig}"
+            pattern_badge_html = (
+                f'<span class="badge" style="background:{pcolor};color:#fff;">{label}</span>'
+            )
+        except (ValueError, KeyError):
+            pass
+
+    notes_html = (
+        f'<div style="font-size:0.78rem;color:var(--slate-500);margin-top:6px;">📝 {escape(notes)}</div>'
+        if notes else ""
+    )
+
+    return f"""
+    <div class="stock-card" data-symbol="{escape(sym).lower()}">
+      <div class="stock-card-header">
+        <div class="stock-card-info">
+          <h3>{escape(sym)}</h3>
+          <div class="symbol" style="color:{pnl_color};font-weight:600;">{pnl_text}</div>
+        </div>
+        <div class="stock-card-badges">
+          <span class="badge" style="background:{comp_color};color:#fff;font-weight:600;"
+                title="Tech+BNF+Pattern×0.5">📊 {comp_sign}{composite:.1f}</span>
+          {signal_badge_html}
+          {bnf_badge_html}
+          {pattern_badge_html}
+          <span class="badge {badge_cls}">{market_label}</span>
+        </div>
+      </div>
+      <div style="font-size:0.85rem;color:var(--slate-700);margin-top:6px;">
+        평균 {avg_str} → 현재 {last_str} · {qty}주 (평가 {eval_str})
+      </div>
+      {fresh_line}
+      {notes_html}
+      <div class="stock-card-actions" style="margin-top:10px;">
+        <a class="btn btn-primary btn-sm" href="/stock/{escape(sym)}">상세 분석 →</a>
+        <form method="post" action="/portfolio/delete" style="display:inline;margin:0;"
+              onsubmit="return confirm('{escape(sym)} 보유 종목을 삭제하시겠습니까?');">
+          {_csrf_input()}
+          <input type="hidden" name="symbol" value="{escape(sym)}">
+          <button type="submit" class="btn btn-danger btn-sm">{_ICON_TRASH} 삭제</button>
+        </form>
+      </div>
+    </div>"""
+
+
+@app.route("/portfolio")
+def portfolio_view():
+    sort_key = request.args.get("sort", "pnl_pct")
+    error_msg = request.args.get("error", "")
+    error_banner = (
+        f'<div class="alert alert-error">{_ICON_WARN}<span>{escape(error_msg)}</span></div>'
+        if error_msg else ""
+    )
+
+    holdings = portfolio_db.list_holdings_with_pnl()
+
+    def sort_fn(h: dict) -> tuple:
+        tier_no_pnl = 0 if h.get("pnl_pct") is not None else 1
+        if sort_key == "pnl_abs":
+            return (tier_no_pnl, -(h.get("pnl_abs") or 0), h["symbol"])
+        if sort_key == "composite":
+            return (tier_no_pnl, -_composite_score_row(h), h["symbol"])
+        if sort_key == "symbol":
+            return (0, 0, h["symbol"])
+        return (tier_no_pnl, -(h.get("pnl_pct") or 0), h["symbol"])
+
+    holdings.sort(key=sort_fn)
+
+    # 통계 헤더
+    total_eval = sum(
+        (h["last_close"] * h["qty"]) for h in holdings
+        if h.get("last_close") is not None
+    )
+    total_pnl = sum(
+        h["pnl_abs"] for h in holdings
+        if h.get("pnl_abs") is not None
+    )
+    pcts = [h["pnl_pct"] for h in holdings if h.get("pnl_pct") is not None]
+    avg_pct = (sum(pcts) / len(pcts)) if pcts else None
+
+    has_korea = any((h.get("market") or _market_of(h["symbol"])) == "korea" for h in holdings)
+    has_us = any((h.get("market") or _market_of(h["symbol"])) == "us" for h in holdings)
+    market_for_total = "korea" if (has_korea and not has_us) else "us"
+    eval_str = _format_price(total_eval, market_for_total) if holdings else "—"
+    pnl_str = _format_signed(total_pnl, market_for_total, currency=True) if holdings else "—"
+    avg_pct_str = _format_signed(avg_pct, None) if avg_pct is not None else "—"
+    pnl_color = "#16A34A" if total_pnl >= 0 else "#DC2626"
+    pct_color = ("#16A34A" if (avg_pct or 0) >= 0 else "#DC2626") if avg_pct is not None else "var(--slate-500)"
+
+    stats_card = f"""
+    <div class="card" style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">
+      <div><strong>{len(holdings)}</strong>종목 보유</div>
+      <div>평가액 <strong>{eval_str}</strong></div>
+      <div>평균 수익률 <strong style="color:{pct_color};">{avg_pct_str}</strong></div>
+      <div>총 손익 <strong style="color:{pnl_color};">{pnl_str}</strong></div>
+    </div>"""
+
+    add_form = f"""
+    <div class="card">
+      <div class="card-title">{_ICON_PLUS} 보유 종목 추가 / 갱신</div>
+      <form method="post" action="/portfolio/add">
+        {_csrf_input()}
+        <div class="add-form">
+          <div class="field autocomplete-wrap">
+            <label for="stock-search-input">심볼</label>
+            <input name="symbol" id="stock-search-input"
+                   role="combobox" aria-autocomplete="list"
+                   aria-expanded="false" aria-controls="autocomplete-list"
+                   placeholder="종목 검색 (예: 005930.KS, AAPL)" autocomplete="off"
+                   required style="width:240px;">
+            <div id="autocomplete-list" class="autocomplete-list"
+                 role="listbox" aria-label="종목 검색 결과"></div>
+          </div>
+          <div class="field">
+            <label>평균가</label>
+            <input name="avg_price" type="number" step="any" min="0.000001"
+                   placeholder="12000" required style="width:140px;">
+          </div>
+          <div class="field">
+            <label>수량</label>
+            <input name="qty" type="number" min="0" placeholder="10"
+                   required style="width:100px;">
+          </div>
+          <div class="field">
+            <label>메모 (선택)</label>
+            <input name="notes" placeholder="예: 장기 보유" style="width:200px;">
+          </div>
+          <div class="field">
+            <label>&nbsp;</label>
+            <button type="submit" class="btn btn-success">{_ICON_PLUS} 추가/갱신</button>
+          </div>
+        </div>
+      </form>
+    </div>"""
+
+    sort_links = []
+    for key, label in (("pnl_pct", "수익률 %"), ("pnl_abs", "손익 절대"),
+                      ("composite", "추천 강도"), ("symbol", "종목명")):
+        active = key == sort_key
+        style = ("background:var(--slate-700);color:#fff;" if active
+                 else "background:var(--slate-100);color:var(--slate-700);")
+        sort_links.append(
+            f'<a href="/portfolio?sort={key}" class="badge" '
+            f'style="{style}padding:6px 12px;">{label}</a>'
+        )
+    sort_bar = '<div style="display:flex;gap:6px;margin:12px 0;">' + "".join(sort_links) + '</div>'
+
+    now_ts = int(time.time())
+    if holdings:
+        cards_html = '<div class="stock-grid">' + "".join(
+            _portfolio_card(h, now_ts) for h in holdings
+        ) + '</div>'
+    else:
+        cards_html = """
+        <div class="empty-state">
+          <p>아직 등록된 보유 종목이 없습니다. 위 폼으로 추가해보세요.</p>
+        </div>"""
+
+    body = f"""
+    <div class="page-header">
+      <h1>포트폴리오</h1>
+      <p>보유 종목 + 평균가 → 손익 + 매매 시그널 1:1 매칭</p>
+    </div>
+    {error_banner}
+    {stats_card}
+    {add_form}
+    {sort_bar}
+    {cards_html}"""
+    return _page("포트폴리오", body, _AUTOCOMPLETE_JS)
+
+
+@app.route("/portfolio/add", methods=["POST"])
+def portfolio_add():
+    _csrf_validate()
+    symbol = request.form.get("symbol", "").strip()
+    avg_price_s = request.form.get("avg_price", "").strip()
+    qty_s = request.form.get("qty", "").strip()
+    notes = (request.form.get("notes") or "").strip() or None
+
+    if not symbol:
+        return redirect(url_for("portfolio_view", error="심볼을 입력하세요."), code=303)
+    symbol = sanitize_stock_symbol(symbol)
+    if not validate_stock_symbol(symbol):
+        return redirect(url_for("portfolio_view", error=f"유효하지 않은 심볼: {symbol}"), code=303)
+    try:
+        avg_price = float(avg_price_s)
+        qty = int(qty_s)
+    except ValueError:
+        return redirect(url_for("portfolio_view", error="평균가/수량이 숫자여야 합니다."), code=303)
+    try:
+        portfolio_db.add_holding(symbol, avg_price, qty, notes=notes)
+    except ValueError as e:
+        return redirect(url_for("portfolio_view", error=str(e)), code=303)
+    logger.info("portfolio.add %s avg=%s qty=%s", symbol, avg_price, qty)
+    return redirect(url_for("portfolio_view"), code=303)
+
+
+@app.route("/portfolio/update", methods=["POST"])
+def portfolio_update():
+    _csrf_validate()
+    symbol = request.form.get("symbol", "").strip()
+    if not symbol:
+        return redirect(url_for("portfolio_view"), code=303)
+    kwargs: dict = {}
+    if request.form.get("avg_price"):
+        try:
+            kwargs["avg_price"] = float(request.form["avg_price"])
+        except ValueError:
+            return redirect(url_for("portfolio_view", error="평균가 숫자 오류"), code=303)
+    if request.form.get("qty"):
+        try:
+            kwargs["qty"] = int(request.form["qty"])
+        except ValueError:
+            return redirect(url_for("portfolio_view", error="수량 숫자 오류"), code=303)
+    if "notes" in request.form:
+        kwargs["notes"] = request.form["notes"]
+    try:
+        portfolio_db.update_holding(symbol, **kwargs)
+    except ValueError as e:
+        return redirect(url_for("portfolio_view", error=str(e)), code=303)
+    return redirect(url_for("portfolio_view"), code=303)
+
+
+@app.route("/portfolio/delete", methods=["POST"])
+def portfolio_delete():
+    _csrf_validate()
+    symbol = request.form.get("symbol", "").strip()
+    if symbol:
+        portfolio_db.remove_holding(symbol)
+        logger.info("portfolio.delete %s", symbol)
+    return redirect(url_for("portfolio_view"), code=303)
 
 
 def run_web(host: str = "0.0.0.0", port: int = 8080, debug: bool = False,

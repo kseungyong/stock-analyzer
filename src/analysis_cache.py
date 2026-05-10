@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS analysis_cache (
     bnf_signal_score  INTEGER,
     pattern_json      TEXT,
     pattern_signal    TEXT,
-    pattern_score     INTEGER
+    pattern_score     INTEGER,
+    last_close        REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_cache_market
@@ -83,6 +84,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE analysis_cache ADD COLUMN pattern_signal TEXT")
     if "pattern_score" not in cols:
         conn.execute("ALTER TABLE analysis_cache ADD COLUMN pattern_score INTEGER")
+    # Portfolio (last_close — 손익 계산용)
+    if "last_close" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN last_close REAL")
 
 
 def put(
@@ -98,12 +102,9 @@ def put(
     pattern_json: str | None = None,
     pattern_signal: str | None = None,
     pattern_score: int | None = None,
+    last_close: float | None = None,
 ) -> None:
-    """analysis_cache UPSERT. 같은 cache_key 존재 시 덮어쓴다.
-
-    signal/bnf_signal/pattern 매개변수 None 이면 NULL 저장 (UPSERT 시 기존 값을 NULL 로
-    덮어쓰는 효과).
-    """
+    """analysis_cache UPSERT. 같은 cache_key 존재 시 덮어쓴다."""
     now_unix = int(time.time())
     with _writer_lock:
         with closing(_connect()) as conn:
@@ -114,8 +115,9 @@ def put(
                        (cache_key, market, result_html, generated_at, source,
                         signal_value, signal_score,
                         bnf_signal_value, bnf_signal_score,
-                        pattern_json, pattern_signal, pattern_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        pattern_json, pattern_signal, pattern_score,
+                        last_close)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(cache_key) DO UPDATE SET
                          market           = excluded.market,
                          result_html      = excluded.result_html,
@@ -127,11 +129,13 @@ def put(
                          bnf_signal_score = excluded.bnf_signal_score,
                          pattern_json     = excluded.pattern_json,
                          pattern_signal   = excluded.pattern_signal,
-                         pattern_score    = excluded.pattern_score""",
+                         pattern_score    = excluded.pattern_score,
+                         last_close       = excluded.last_close""",
                     (cache_key, market, result_html, now_unix, source,
                      signal_value, signal_score,
                      bnf_signal_value, bnf_signal_score,
-                     pattern_json, pattern_signal, pattern_score),
+                     pattern_json, pattern_signal, pattern_score,
+                     last_close),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -146,7 +150,8 @@ def get(cache_key: str) -> dict | None:
             """SELECT cache_key, market, result_html, generated_at, source,
                       signal_value, signal_score,
                       bnf_signal_value, bnf_signal_score,
-                      pattern_json, pattern_signal, pattern_score
+                      pattern_json, pattern_signal, pattern_score,
+                      last_close
                FROM analysis_cache WHERE cache_key = ?""",
             (cache_key,),
         ).fetchone()
@@ -165,6 +170,7 @@ def get(cache_key: str) -> dict | None:
         "pattern_json": row[9] if len(row) > 9 else None,
         "pattern_signal": row[10] if len(row) > 10 else None,
         "pattern_score": row[11] if len(row) > 11 else None,
+        "last_close": row[12] if len(row) > 12 else None,
     }
 
 
