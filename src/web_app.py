@@ -2467,7 +2467,9 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
             pass
 
     notes_html = (
-        f'<div style="font-size:0.78rem;color:var(--slate-500);margin-top:6px;">📝 {escape(notes)}</div>'
+        f'<div style="font-size:0.85rem;color:#92400E;background:#FEF3C7;'
+        f'border-left:3px solid #F59E0B;padding:6px 10px;margin-top:8px;'
+        f'border-radius:4px;">📝 {escape(notes)}</div>'
         if notes else ""
     )
 
