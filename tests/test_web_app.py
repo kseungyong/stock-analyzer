@@ -268,7 +268,8 @@ class TestAnalyzeBgCachePut:
 
         def fake_put(cache_key, market, result_html, source, *,
                      signal_value=None, signal_score=None,
-                     bnf_signal_value=None, bnf_signal_score=None):
+                     bnf_signal_value=None, bnf_signal_score=None,
+                     **_extra):
             captured["cache_key"] = cache_key
             captured["market"] = market
             captured["result_html"] = result_html
@@ -1039,7 +1040,8 @@ class TestAnalyzeBgSavesSignal:
 
         def fake_put(cache_key, market, result_html, source, *,
                      signal_value=None, signal_score=None,
-                     bnf_signal_value=None, bnf_signal_score=None):
+                     bnf_signal_value=None, bnf_signal_score=None,
+                     **_extra):
             captured["signal_value"] = signal_value
             captured["signal_score"] = signal_score
 

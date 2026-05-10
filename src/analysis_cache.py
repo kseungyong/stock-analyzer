@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS analysis_cache (
     signal_value      TEXT,
     signal_score      INTEGER,
     bnf_signal_value  TEXT,
-    bnf_signal_score  INTEGER
+    bnf_signal_score  INTEGER,
+    pattern_json      TEXT,
+    pattern_signal    TEXT,
+    pattern_score     INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_cache_market
@@ -73,6 +76,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE analysis_cache ADD COLUMN bnf_signal_value TEXT")
     if "bnf_signal_score" not in cols:
         conn.execute("ALTER TABLE analysis_cache ADD COLUMN bnf_signal_score INTEGER")
+    # Phase A — pattern indicators (이동평균 4상태 + Phase B/C/D/E full payload)
+    if "pattern_json" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN pattern_json TEXT")
+    if "pattern_signal" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN pattern_signal TEXT")
+    if "pattern_score" not in cols:
+        conn.execute("ALTER TABLE analysis_cache ADD COLUMN pattern_score INTEGER")
 
 
 def put(
@@ -85,10 +95,14 @@ def put(
     signal_score: int | None = None,
     bnf_signal_value: str | None = None,
     bnf_signal_score: int | None = None,
+    pattern_json: str | None = None,
+    pattern_signal: str | None = None,
+    pattern_score: int | None = None,
 ) -> None:
     """analysis_cache UPSERT. 같은 cache_key 존재 시 덮어쓴다.
 
-    signal/bnf_signal 매개변수 None 이면 NULL 저장 (UPSERT 시 기존 값을 NULL 로 덮어쓰는 효과).
+    signal/bnf_signal/pattern 매개변수 None 이면 NULL 저장 (UPSERT 시 기존 값을 NULL 로
+    덮어쓰는 효과).
     """
     now_unix = int(time.time())
     with _writer_lock:
@@ -99,8 +113,9 @@ def put(
                     """INSERT INTO analysis_cache
                        (cache_key, market, result_html, generated_at, source,
                         signal_value, signal_score,
-                        bnf_signal_value, bnf_signal_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        bnf_signal_value, bnf_signal_score,
+                        pattern_json, pattern_signal, pattern_score)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(cache_key) DO UPDATE SET
                          market           = excluded.market,
                          result_html      = excluded.result_html,
@@ -109,10 +124,14 @@ def put(
                          signal_value     = excluded.signal_value,
                          signal_score     = excluded.signal_score,
                          bnf_signal_value = excluded.bnf_signal_value,
-                         bnf_signal_score = excluded.bnf_signal_score""",
+                         bnf_signal_score = excluded.bnf_signal_score,
+                         pattern_json     = excluded.pattern_json,
+                         pattern_signal   = excluded.pattern_signal,
+                         pattern_score    = excluded.pattern_score""",
                     (cache_key, market, result_html, now_unix, source,
                      signal_value, signal_score,
-                     bnf_signal_value, bnf_signal_score),
+                     bnf_signal_value, bnf_signal_score,
+                     pattern_json, pattern_signal, pattern_score),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -126,7 +145,8 @@ def get(cache_key: str) -> dict | None:
         row = conn.execute(
             """SELECT cache_key, market, result_html, generated_at, source,
                       signal_value, signal_score,
-                      bnf_signal_value, bnf_signal_score
+                      bnf_signal_value, bnf_signal_score,
+                      pattern_json, pattern_signal, pattern_score
                FROM analysis_cache WHERE cache_key = ?""",
             (cache_key,),
         ).fetchone()
@@ -142,6 +162,9 @@ def get(cache_key: str) -> dict | None:
         "signal_score": row[6],
         "bnf_signal_value": row[7],
         "bnf_signal_score": row[8],
+        "pattern_json": row[9] if len(row) > 9 else None,
+        "pattern_signal": row[10] if len(row) > 10 else None,
+        "pattern_score": row[11] if len(row) > 11 else None,
     }
 
 

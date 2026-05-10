@@ -203,12 +203,18 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
             try:
                 sig = result.get("signal") or {}
                 bnf = result.get("bnf_signal") or {}
+                patterns = result.get("patterns") or {}
+                pat_summary = patterns.get("summary") or {}
+                import json as _json
                 analysis_cache.put(
                     symbol, market, html, source="manual",
                     signal_value=sig.get("signal"),
                     signal_score=sig.get("score"),
                     bnf_signal_value=bnf.get("signal"),
                     bnf_signal_score=bnf.get("score"),
+                    pattern_json=_json.dumps(patterns, ensure_ascii=False) if patterns else None,
+                    pattern_signal=pat_summary.get("signal"),
+                    pattern_score=pat_summary.get("score"),
                 )
             except Exception as e:
                 logger.warning("analysis_cache.put 실패 (job 결과는 정상): %s", e)
@@ -281,12 +287,18 @@ def _run_full_analysis_bg(job_id: str) -> None:
                 ind_html = generate_report([r])
                 sig = r.get("signal") or {}
                 bnf = r.get("bnf_signal") or {}
+                patterns = r.get("patterns") or {}
+                pat_summary = patterns.get("summary") or {}
+                import json as _json
                 analysis_cache.put(
                     sym, symbol_to_market.get(sym, "us"), ind_html, source="manual",
                     signal_value=sig.get("signal"),
                     signal_score=sig.get("score"),
                     bnf_signal_value=bnf.get("signal"),
                     bnf_signal_score=bnf.get("score"),
+                    pattern_json=_json.dumps(patterns, ensure_ascii=False) if patterns else None,
+                    pattern_signal=pat_summary.get("signal"),
+                    pattern_score=pat_summary.get("score"),
                 )
                 cached += 1
             except Exception as e:
@@ -1418,6 +1430,26 @@ def index():
             cache_row.get("bnf_signal_score") if cache_row else None,
             prefix="BNF ",
         )
+        # Pattern 배지 (Phase A: 이동평균 4상태) — top_patterns 가 있으면 표시
+        pattern_badge_html = ""
+        if cache_row and cache_row.get("pattern_signal"):
+            try:
+                import json as _json
+                pj = _json.loads(cache_row.get("pattern_json") or "{}")
+                tops = (pj.get("summary") or {}).get("top_patterns") or []
+                psig = cache_row["pattern_signal"]
+                color = {"매수": "#16A34A", "매도": "#DC2626", "사지마": "#D97706", "팔지마": "#D97706"}.get(psig, "#64748B")
+                tops_text = " · ".join(tops[:2]) if tops else ""
+                if tops_text:
+                    pattern_badge_html = (
+                        f'<span class="badge" style="background:{color};color:#fff;">📈 {psig}: {tops_text}</span>'
+                    )
+                else:
+                    pattern_badge_html = (
+                        f'<span class="badge" style="background:{color};color:#fff;">📈 {psig}</span>'
+                    )
+            except (ValueError, KeyError):
+                pass
         cards.append(f"""
         <div class="stock-card" data-name="{escape(s['name']).lower()}" data-symbol="{escape(s['symbol']).lower()}">
           <div class="stock-card-header">
@@ -1428,6 +1460,7 @@ def index():
             <div class="stock-card-badges">
               {signal_badge_html}
               {bnf_badge_html}
+              {pattern_badge_html}
               <span class="badge {badge_cls}">{market_label}</span>
             </div>
           </div>

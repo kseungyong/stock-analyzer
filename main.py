@@ -124,6 +124,16 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
 
         sentiment = analyze_sentiment(news)
 
+        # Pattern indicators (Phase A: 이동평균 4상태) — 실패해도 분석 본체 무관
+        patterns = None
+        try:
+            from src.pattern_indicators import detect_all_patterns
+            # df 컬럼명 lowercase 변환 — fetch_stock_data 는 'Close', detect 는 'close'
+            df_lower = df.rename(columns={c: c.lower() for c in df.columns})
+            patterns = detect_all_patterns(df_lower, market or "korea")
+        except Exception as e:
+            logger.warning("pattern detection 실패 (분석은 계속): %s", e)
+
         return {
             "name": name,
             "symbol": symbol,
@@ -133,6 +143,7 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
             "prediction": prediction,
             "news": news,
             "sentiment": sentiment,
+            "patterns": patterns,
         }
     except Exception as e:
         logger.error("분석 실패 — %s (%s): %s", name, symbol, e)
@@ -198,6 +209,9 @@ def auto_analyze_market(market: str) -> None:
             html = _rg.generate_report([result])
             sig = result.get("signal") or {}
             bnf = result.get("bnf_signal") or {}
+            patterns = result.get("patterns") or {}
+            pat_summary = patterns.get("summary") or {}
+            import json as _json
             analysis_cache.put(
                 cache_key=s["symbol"],
                 market=market,
@@ -207,6 +221,9 @@ def auto_analyze_market(market: str) -> None:
                 signal_score=sig.get("score"),
                 bnf_signal_value=bnf.get("signal"),
                 bnf_signal_score=bnf.get("score"),
+                pattern_json=_json.dumps(patterns, ensure_ascii=False) if patterns else None,
+                pattern_signal=pat_summary.get("signal"),
+                pattern_score=pat_summary.get("score"),
             )
             success += 1
         except Exception as e:
