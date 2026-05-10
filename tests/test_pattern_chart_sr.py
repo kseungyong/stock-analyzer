@@ -1,6 +1,8 @@
 """차트 패턴 + 지지/저항 + 확률 경고 + 통합 summary 테스트."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -89,6 +91,19 @@ def test_warning_with_double_top():
 def test_warning_no_match_returns_none():
     chart = [{"name": "삼각형 수렴 (대칭)", "signal": "관망", "confidence": 0.5}]
     assert detect_warning(chart) is None
+
+
+def test_chart_pattern_json_serializable():
+    """detect_chart_patterns 결과는 stdlib json.dumps 로 직렬화 가능해야 함.
+
+    이전 버그: numpy 비교 결과 (numpy.bool_) 가 'breakout'/'breakdown' 필드에
+    그대로 들어가 analysis_cache.put 에서 'Object of type bool is not JSON
+    serializable' 발생 → cache miss.
+    """
+    df = _df_double_bottom()
+    patterns = detect_chart_patterns(df)
+    assert patterns, "double bottom fixture 가 패턴을 발견해야 한다"
+    json.dumps(patterns)  # numpy.bool_ 가 끼어 있으면 TypeError
 
 
 def test_summary_integration_random():

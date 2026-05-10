@@ -96,7 +96,7 @@ def _detect_double_bottom(
     if between_high <= max(p1, p2):
         return None
     last_close = close[-1]
-    breakout = last_close > between_high
+    breakout = bool(last_close > between_high)
     return {
         "name": "더블바텀(W)",
         "signal": "매수",
@@ -133,7 +133,7 @@ def _detect_double_top(
     if between_low >= min(p1, p2):
         return None
     last_close = close[-1]
-    breakdown = last_close < between_low
+    breakdown = bool(last_close < between_low)
     return {
         "name": "더블탑(M)",
         "signal": "매도",
