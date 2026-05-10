@@ -1720,6 +1720,7 @@ def stock_view(symbol: str):
     fresh = analysis_cache.is_fresh(row, int(time.time()))
     body_parts = [
         _render_meta_bar(row, fresh, name),
+        _render_portfolio_banner(symbol, row),
         f'<div class="card result-frame">{row["result_html"]}</div>',
     ]
     # 패턴 분석 섹션 (Phase A-E)
@@ -1732,6 +1733,59 @@ def stock_view(symbol: str):
     except Exception as e:
         logger.warning("prediction_history 렌더 실패 — %s: %s", symbol, e)
     return _page(f"{name} 분석 결과", "".join(body_parts))
+
+
+def _render_portfolio_banner(symbol: str, row: dict) -> str:
+    """분석 페이지 상단 — 이 종목이 portfolio 에 있으면 평균가/손익 배너."""
+    h = portfolio_db.get_holding_with_pnl(symbol)
+    if h is None:
+        return ""
+    market = row.get("market") or _market_of(symbol)
+    avg = h["avg_price"]
+    qty = h["qty"]
+    last = h.get("last_close") or row.get("last_close")
+    notes = h.get("notes") or ""
+    pnl_pct = h.get("pnl_pct")
+    pnl_abs = h.get("pnl_abs")
+    if pnl_pct is None and last is not None:
+        pnl_pct = (last - avg) / avg * 100
+        pnl_abs = (last - avg) * qty
+
+    if pnl_pct is None:
+        bg = "#F1F5F9"
+        border = "var(--slate-300)"
+        color = "var(--slate-600)"
+        pnl_text = "분석 결과로 손익 계산 가능"
+    elif pnl_pct >= 0:
+        bg = "#DCFCE7"
+        border = "#16A34A"
+        color = "#15803D"
+        pnl_text = f"+{pnl_pct:.2f}% (+{_format_price(abs(pnl_abs), market)})"
+    else:
+        bg = "#FEE2E2"
+        border = "#DC2626"
+        color = "#991B1B"
+        pnl_text = f"{pnl_pct:.2f}% (-{_format_price(abs(pnl_abs), market)})"
+
+    avg_str = _format_price(avg, market)
+    last_str = _format_price(last, market) if last is not None else "—"
+    notes_html = (
+        f' · 📝 <em>{escape(notes)}</em>'
+        if notes else ""
+    )
+    return (
+        f'<div style="background:{bg};border-left:4px solid {border};'
+        f'padding:12px 16px;margin:8px 0 16px 0;border-radius:6px;'
+        f'display:flex;flex-wrap:wrap;gap:18px;align-items:center;">'
+        f'<div style="font-size:1.05rem;font-weight:600;color:{color};">'
+        f'💼 보유 중 · {pnl_text}</div>'
+        f'<div style="color:var(--slate-700);font-size:0.9rem;">'
+        f'평균 <strong>{avg_str}</strong> → 현재 <strong>{last_str}</strong> '
+        f'· {qty}주{notes_html}</div>'
+        f'<a href="/portfolio" style="margin-left:auto;font-size:0.85rem;'
+        f'color:var(--slate-600);text-decoration:none;">포트폴리오 →</a>'
+        f'</div>'
+    )
 
 
 def _format_price(price: float, market: str) -> str:
@@ -2708,61 +2762,130 @@ def portfolio_view():
       <input type="hidden" name="avg_price" disabled>
       <input type="hidden" name="qty" disabled>
       <input type="hidden" name="notes" disabled>
-    </form>"""
+    </form>
+    <div id="edit-modal" role="dialog" aria-labelledby="edit-modal-title" hidden
+         style="position:fixed;inset:0;background:rgba(15,23,42,0.55);
+         display:flex;align-items:center;justify-content:center;z-index:1000;
+         padding:16px;">
+      <div style="background:#fff;border-radius:8px;max-width:420px;width:100%;
+                  padding:20px;box-shadow:0 12px 32px rgba(0,0,0,0.2);">
+        <h3 id="edit-modal-title" style="margin:0 0 12px 0;font-size:1.1rem;">메모 수정</h3>
+        <div id="edit-modal-symbol" style="font-size:0.8rem;color:var(--slate-500);
+             margin-bottom:10px;"></div>
+        <input id="edit-modal-input" type="text" autocomplete="off"
+               style="width:100%;padding:10px;border:1.5px solid var(--slate-300);
+               border-radius:6px;font-size:1rem;box-sizing:border-box;">
+        <div id="edit-modal-error" role="alert"
+             style="color:#DC2626;font-size:0.85rem;margin-top:6px;
+             min-height:1.2em;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+          <button type="button" id="edit-modal-cancel" class="btn btn-sm"
+                  style="background:var(--slate-100);color:var(--slate-700);">취소</button>
+          <button type="button" id="edit-modal-save" class="btn btn-sm btn-primary">저장</button>
+        </div>
+      </div>
+    </div>"""
 
     update_js = """
 <script>
 (function() {
   const FORM = document.getElementById('portfolio-update-form');
   const FIELDS = ['avg_price', 'qty', 'notes'];
+  const modal = document.getElementById('edit-modal');
+  const titleEl = document.getElementById('edit-modal-title');
+  const symbolEl = document.getElementById('edit-modal-symbol');
+  const inputEl = document.getElementById('edit-modal-input');
+  const errorEl = document.getElementById('edit-modal-error');
+  const saveBtn = document.getElementById('edit-modal-save');
+  const cancelBtn = document.getElementById('edit-modal-cancel');
 
+  let pending = null;  // {symbol, field, validate}
+
+  function openModal({title, symbol, field, current, validate, inputType, allowEmpty}) {
+    pending = {symbol, field, validate, allowEmpty: !!allowEmpty};
+    titleEl.textContent = title;
+    symbolEl.textContent = symbol;
+    inputEl.type = inputType || 'text';
+    if (inputType === 'number') {
+      inputEl.step = field === 'qty' ? '1' : 'any';
+      inputEl.min = field === 'qty' ? '0' : '0.000001';
+    } else {
+      inputEl.removeAttribute('step');
+      inputEl.removeAttribute('min');
+    }
+    inputEl.value = current || '';
+    errorEl.textContent = '';
+    modal.hidden = false;
+    setTimeout(() => { inputEl.focus(); inputEl.select(); }, 0);
+  }
+  function closeModal() {
+    modal.hidden = true;
+    pending = null;
+  }
   function submitUpdate(symbol, field, value) {
     document.getElementById('update-symbol').value = symbol;
     FIELDS.forEach(f => {
       const el = FORM.querySelector(`input[name="${f}"]`);
-      if (f === field) {
-        el.disabled = false;
-        el.value = value;
-      } else {
-        el.disabled = true;
-      }
+      if (f === field) { el.disabled = false; el.value = value; }
+      else { el.disabled = true; }
     });
     FORM.submit();
   }
+  function tryCommit() {
+    if (!pending) return;
+    const raw = inputEl.value;
+    if (!pending.allowEmpty && !raw.trim()) {
+      errorEl.textContent = '값을 입력하세요.';
+      return;
+    }
+    if (pending.validate) {
+      const err = pending.validate(raw);
+      if (err) { errorEl.textContent = err; return; }
+    }
+    submitUpdate(pending.symbol, pending.field, raw);
+  }
+
+  saveBtn.addEventListener('click', tryCommit);
+  cancelBtn.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (modal.hidden) return;
+    if (e.key === 'Escape') closeModal();
+    else if (e.key === 'Enter') { e.preventDefault(); tryCommit(); }
+  });
 
   document.addEventListener('click', function(e) {
     let btn = e.target.closest('[data-edit-notes]');
     if (btn) {
-      const cur = btn.dataset.notes || '';
-      const next = window.prompt('메모를 입력하세요 (빈 값이면 제거)', cur);
-      if (next === null) return;
-      submitUpdate(btn.dataset.symbol, 'notes', next);
+      openModal({
+        title: '메모 수정', symbol: btn.dataset.symbol, field: 'notes',
+        current: btn.dataset.notes || '', allowEmpty: true,
+      });
       return;
     }
     btn = e.target.closest('[data-edit-avg-price]');
     if (btn) {
-      const cur = btn.dataset.current || '';
-      const next = window.prompt('새 평균가를 입력하세요 (>0)', cur);
-      if (next === null) return;
-      const v = parseFloat(next);
-      if (!isFinite(v) || v <= 0) {
-        alert('평균가는 0보다 큰 숫자여야 합니다.');
-        return;
-      }
-      submitUpdate(btn.dataset.symbol, 'avg_price', String(v));
+      openModal({
+        title: '평균가 수정', symbol: btn.dataset.symbol, field: 'avg_price',
+        current: btn.dataset.current || '', inputType: 'number',
+        validate: (v) => {
+          const n = parseFloat(v);
+          return (!isFinite(n) || n <= 0) ? '평균가는 0보다 큰 숫자여야 합니다.' : '';
+        },
+      });
       return;
     }
     btn = e.target.closest('[data-edit-qty]');
     if (btn) {
-      const cur = btn.dataset.current || '';
-      const next = window.prompt('새 수량을 입력하세요 (≥0)', cur);
-      if (next === null) return;
-      const v = parseInt(next, 10);
-      if (!isFinite(v) || v < 0) {
-        alert('수량은 0 이상의 정수여야 합니다.');
-        return;
-      }
-      submitUpdate(btn.dataset.symbol, 'qty', String(v));
+      openModal({
+        title: '수량 수정', symbol: btn.dataset.symbol, field: 'qty',
+        current: btn.dataset.current || '', inputType: 'number',
+        validate: (v) => {
+          const n = parseInt(v, 10);
+          return (!isFinite(n) || n < 0 || String(n) !== String(v).trim()) ?
+            '수량은 0 이상의 정수여야 합니다.' : '';
+        },
+      });
       return;
     }
   });
