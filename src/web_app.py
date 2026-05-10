@@ -2378,8 +2378,9 @@ def _format_signed(value: float | None, market: str | None,
     return f"{sign}{value:.2f}%"
 
 
-def _portfolio_card(h: dict, now_ts: int) -> str:
+def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
     sym = h["symbol"]
+    name = name_map.get(sym, sym)
     market = h.get("market") or _market_of(sym)
     avg = h["avg_price"]
     qty = h["qty"]
@@ -2471,11 +2472,11 @@ def _portfolio_card(h: dict, now_ts: int) -> str:
     )
 
     return f"""
-    <div class="stock-card" data-symbol="{escape(sym).lower()}">
+    <div class="stock-card" data-symbol="{escape(sym).lower()}" data-name="{escape(name).lower()}">
       <div class="stock-card-header">
         <div class="stock-card-info">
-          <h3>{escape(sym)}</h3>
-          <div class="symbol" style="color:{pnl_color};font-weight:600;">{pnl_text}</div>
+          <h3>{escape(name)}</h3>
+          <div class="symbol">{escape(sym)}</div>
         </div>
         <div class="stock-card-badges">
           <span class="badge" style="background:{comp_color};color:#fff;font-weight:600;"
@@ -2486,7 +2487,10 @@ def _portfolio_card(h: dict, now_ts: int) -> str:
           <span class="badge {badge_cls}">{market_label}</span>
         </div>
       </div>
-      <div style="font-size:0.85rem;color:var(--slate-700);margin-top:6px;">
+      <div style="font-size:0.95rem;color:{pnl_color};font-weight:600;margin-top:6px;">
+        {pnl_text}
+      </div>
+      <div style="font-size:0.85rem;color:var(--slate-700);margin-top:4px;">
         평균 {avg_str} → 현재 {last_str} · {qty}주 (평가 {eval_str})
       </div>
       {fresh_line}
@@ -2526,33 +2530,53 @@ def portfolio_view():
 
     holdings.sort(key=sort_fn)
 
-    # 통계 헤더
-    total_eval = sum(
-        (h["last_close"] * h["qty"]) for h in holdings
-        if h.get("last_close") is not None
-    )
-    total_pnl = sum(
-        h["pnl_abs"] for h in holdings
-        if h.get("pnl_abs") is not None
-    )
+    # name_map — 카드에 종목명 표시용
+    cfg = _load_config()
+    name_map = {s["symbol"]: s["name"] for s in _get_all_stocks(cfg)}
+
+    # 시장별 분리 통계 (KRW 와 USD 는 통화가 달라 합산 불가)
+    def _market(h: dict) -> str:
+        return h.get("market") or _market_of(h["symbol"])
+
+    by_market = {"korea": [], "us": []}
+    for h in holdings:
+        by_market.setdefault(_market(h), []).append(h)
+
     pcts = [h["pnl_pct"] for h in holdings if h.get("pnl_pct") is not None]
     avg_pct = (sum(pcts) / len(pcts)) if pcts else None
-
-    has_korea = any((h.get("market") or _market_of(h["symbol"])) == "korea" for h in holdings)
-    has_us = any((h.get("market") or _market_of(h["symbol"])) == "us" for h in holdings)
-    market_for_total = "korea" if (has_korea and not has_us) else "us"
-    eval_str = _format_price(total_eval, market_for_total) if holdings else "—"
-    pnl_str = _format_signed(total_pnl, market_for_total, currency=True) if holdings else "—"
     avg_pct_str = _format_signed(avg_pct, None) if avg_pct is not None else "—"
-    pnl_color = "#16A34A" if total_pnl >= 0 else "#DC2626"
-    pct_color = ("#16A34A" if (avg_pct or 0) >= 0 else "#DC2626") if avg_pct is not None else "var(--slate-500)"
+    avg_pct_color = (
+        "#16A34A" if (avg_pct or 0) >= 0 else "#DC2626"
+    ) if avg_pct is not None else "var(--slate-500)"
+
+    def _market_block(market: str, label: str) -> str:
+        rows = by_market.get(market) or []
+        if not rows:
+            return ""
+        eval_amt = sum((h["last_close"] * h["qty"]) for h in rows
+                       if h.get("last_close") is not None)
+        pnl_amt = sum(h["pnl_abs"] for h in rows
+                      if h.get("pnl_abs") is not None)
+        eval_str = _format_price(eval_amt, market) if eval_amt else "—"
+        pnl_str = _format_signed(pnl_amt, market, currency=True) if pnl_amt else "—"
+        pnl_color = "#16A34A" if pnl_amt >= 0 else "#DC2626"
+        return (
+            f'<div style="border-left:3px solid var(--slate-200);padding-left:14px;">'
+            f'<div style="font-size:0.78rem;color:var(--slate-500);">{label} {len(rows)}종목</div>'
+            f'<div>평가 <strong>{eval_str}</strong></div>'
+            f'<div>손익 <strong style="color:{pnl_color};">{pnl_str}</strong></div>'
+            f'</div>'
+        )
 
     stats_card = f"""
     <div class="card" style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">
       <div><strong>{len(holdings)}</strong>종목 보유</div>
-      <div>평가액 <strong>{eval_str}</strong></div>
-      <div>평균 수익률 <strong style="color:{pct_color};">{avg_pct_str}</strong></div>
-      <div>총 손익 <strong style="color:{pnl_color};">{pnl_str}</strong></div>
+      {_market_block("korea", "🇰🇷 한국")}
+      {_market_block("us", "🇺🇸 미국")}
+      <div style="border-left:3px solid var(--slate-200);padding-left:14px;">
+        <div style="font-size:0.78rem;color:var(--slate-500);">평균 수익률 (전체)</div>
+        <div><strong style="color:{avg_pct_color};font-size:1.1rem;">{avg_pct_str}</strong></div>
+      </div>
     </div>"""
 
     add_form = f"""
@@ -2608,7 +2632,7 @@ def portfolio_view():
     now_ts = int(time.time())
     if holdings:
         cards_html = '<div class="stock-grid">' + "".join(
-            _portfolio_card(h, now_ts) for h in holdings
+            _portfolio_card(h, now_ts, name_map) for h in holdings
         ) + '</div>'
     else:
         cards_html = """
