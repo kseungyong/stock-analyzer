@@ -2627,9 +2627,19 @@ def portfolio_view():
 
     now_ts = int(time.time())
     if holdings:
-        cards_html = '<div class="stock-grid">' + "".join(
-            _portfolio_card(h, now_ts, name_map) for h in holdings
-        ) + '</div>'
+        sections = []
+        for market, label in (("korea", "🇰🇷 한국"), ("us", "🇺🇸 미국")):
+            rows = by_market.get(market) or []
+            if not rows:
+                continue
+            grid = "".join(_portfolio_card(h, now_ts, name_map) for h in rows)
+            sections.append(
+                f'<h2 style="margin:24px 0 8px 0;font-size:1.05rem;color:var(--slate-700);">'
+                f'{label} <span style="color:var(--slate-500);font-weight:normal;">'
+                f'({len(rows)}종목)</span></h2>'
+                f'<div class="stock-grid">{grid}</div>'
+            )
+        cards_html = "".join(sections)
     else:
         cards_html = """
         <div class="empty-state">
