@@ -18,3 +18,4 @@ gunicorn>=21.0.0
 pytest>=8.0.0
 finance-datareader>=0.9.60
 pykrx>=1.0.45
+TA-Lib>=0.6
