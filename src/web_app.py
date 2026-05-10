@@ -1689,11 +1689,138 @@ def stock_view(symbol: str):
         _render_meta_bar(row, fresh, name),
         f'<div class="card result-frame">{row["result_html"]}</div>',
     ]
+    # 패턴 분석 섹션 (Phase A-E)
+    try:
+        body_parts.append(_render_pattern_section(row))
+    except Exception as e:
+        logger.warning("pattern section 렌더 실패 — %s: %s", symbol, e)
     try:
         body_parts.append(_render_prediction_history(symbol))
     except Exception as e:
         logger.warning("prediction_history 렌더 실패 — %s: %s", symbol, e)
     return _page(f"{name} 분석 결과", "".join(body_parts))
+
+
+def _render_pattern_section(row: dict) -> str:
+    """5 카테고리 패턴 분석 섹션 (이동평균/캔들/차트/지지저항/경고)."""
+    import json as _json
+    pj_str = row.get("pattern_json")
+    if not pj_str:
+        return ""
+    try:
+        pj = _json.loads(pj_str)
+    except (ValueError, TypeError):
+        return ""
+
+    summary = pj.get("summary") or {}
+    ma = pj.get("ma_state") or {}
+    candles = pj.get("candles") or []
+    chart = pj.get("chart_patterns") or []
+    sr = pj.get("sr_levels") or []
+    warning = pj.get("warning")
+
+    sig_color = {"매수": "#16A34A", "약매수": "#65A30D", "매도": "#DC2626",
+                 "약매도": "#EA580C", "사지마": "#D97706", "팔지마": "#D97706"}.get(
+                     summary.get("signal", "관망"), "#64748B")
+
+    # 종합 헤더
+    score = summary.get("score", 0)
+    sign = "+" if score >= 0 else ""
+    tops = " · ".join(summary.get("top_patterns") or []) or "(패턴 없음)"
+    parts = [f"""
+    <div class="card" style="margin-top:1rem;">
+      <h2 style="margin:0 0 1rem 0;">📊 패턴 분석</h2>
+      <div style="background:{sig_color};color:#fff;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;">
+        <strong style="font-size:1.1rem;">종합 시그널: {escape(summary.get("signal", "관망"))}</strong>
+        &nbsp; <span style="opacity:0.85;">score {sign}{score}</span>
+        <br><small>주요 패턴: {escape(tops)}</small>
+      </div>
+    """]
+
+    # 1. 이동평균
+    if ma.get("signal"):
+        ma_color = sig_color if ma["signal"] in ("매수", "매도") else "#64748B"
+        ma_info = ma.get("ma") or {}
+        ma_extra = ""
+        if ma_info:
+            ma_extra = (
+                f' <small style="color:#64748B;">'
+                f'SMA5: {ma_info.get("sma5", 0):.0f} / '
+                f'SMA50: {ma_info.get("sma50", 0):.0f} / '
+                f'SMA200: {ma_info.get("sma200", 0):.0f}</small>'
+            )
+        parts.append(f"""
+      <h3 style="margin-top:1rem;">📈 이동평균 (4상태)</h3>
+      <p><strong style="color:{ma_color};">{escape(ma["signal"])}</strong>
+         — {escape(ma.get("label", ""))}
+         <small>(신뢰도 {ma.get("confidence", 0)*100:.0f}%)</small></p>
+      <p>{ma_extra}</p>
+    """)
+
+    # 2. 캔들 패턴 (최근)
+    if candles:
+        rows = []
+        for c in candles[:8]:
+            csig = c.get("signal", "관망")
+            ccolor = {"매수": "#16A34A", "매도": "#DC2626"}.get(csig, "#64748B")
+            rows.append(
+                f'<li><span style="color:{ccolor};font-weight:600;">{escape(c.get("name",""))}</span> '
+                f'<small style="color:#64748B;">— {escape(csig)} ({escape(c.get("date",""))})</small></li>'
+            )
+        parts.append(f"""
+      <h3 style="margin-top:1rem;">🕯 캔들 패턴 (최근 5일)</h3>
+      <ul style="margin:0.25rem 0 0.5rem 1.25rem;">{"".join(rows)}</ul>
+    """)
+
+    # 3. 차트 패턴 (구간 정보 포함 — 사용자 요청)
+    if chart:
+        rows = []
+        for cp in chart:
+            csig = cp.get("signal", "관망")
+            ccolor = {"매수": "#16A34A", "매도": "#DC2626"}.get(csig, "#64748B")
+            from_d = cp.get("from_date", "")
+            to_d = cp.get("to_date", "")
+            dur = cp.get("duration_days", 0)
+            range_str = f" <small>[{from_d} ~ {to_d}, {dur}일]</small>" if from_d else ""
+            rows.append(
+                f'<li><span style="color:{ccolor};font-weight:600;">{escape(cp.get("name",""))}</span>'
+                f' — {escape(csig)} (신뢰도 {cp.get("confidence",0)*100:.0f}%){range_str}'
+                f'<br><small style="color:#475569;">{escape(cp.get("details",""))}</small></li>'
+            )
+        parts.append(f"""
+      <h3 style="margin-top:1rem;">📊 차트 패턴 (구간 표시)</h3>
+      <ul style="margin:0.25rem 0 0.5rem 1.25rem;">{"".join(rows)}</ul>
+    """)
+
+    # 4. 지지/저항
+    if sr:
+        rows = []
+        for level in sr:
+            lcolor = "#DC2626" if level.get("type") == "저항" else "#16A34A"
+            rows.append(
+                f'<li><span style="color:{lcolor};font-weight:600;">{level.get("price", 0):,.0f}원</span> '
+                f'— {escape(level.get("type", ""))} '
+                f'<small>({level.get("touches", 0)}회 반응, '
+                f'현재 대비 {level.get("distance_pct", 0):+.1f}%)</small></li>'
+            )
+        parts.append(f"""
+      <h3 style="margin-top:1rem;">🎯 지지/저항 수평선</h3>
+      <ul style="margin:0.25rem 0 0.5rem 1.25rem;">{"".join(rows)}</ul>
+    """)
+
+    # 5. 확률 경고
+    if warning:
+        wcolor = "#16A34A" if warning.get("signal") == "매수" else "#DC2626"
+        parts.append(f"""
+      <h3 style="margin-top:1rem;">⚠️  확률 경고</h3>
+      <p style="background:{wcolor};color:#fff;padding:0.75rem;border-radius:6px;display:inline-block;">
+        <strong>{escape(warning.get("label", ""))}</strong>
+        <small> ({warning.get("confidence_pct", 0)}%)</small>
+      </p>
+    """)
+
+    parts.append("</div>")
+    return "".join(parts)
 
 
 @app.route("/stock/all")
