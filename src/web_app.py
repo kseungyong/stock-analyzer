@@ -93,6 +93,8 @@ def _session_auth_gate():
 
     환경변수 이름은 호환성으로 ENABLE_BASIC_AUTH 유지하지만 인증 메커니즘은
     Flask session 기반. /login (GET, POST) 와 /logout 은 우회.
+    /api/* 는 machine-to-machine 호출 (예: auto-trader analyzer push) 을
+    위해 HTTP Basic Auth header 도 함께 허용.
     """
     if not _basic_auth_on:
         return None
@@ -100,8 +102,17 @@ def _session_auth_gate():
         return None
     if session.get("username") in _basic_auth_users:
         return None
-    # AJAX/POST 면 401, 그 외 GET 은 /login 로 redirect
-    if request.method != "GET" or request.path.startswith("/api/"):
+    # /api/* — machine-to-machine — Basic Auth header 폴백
+    if request.path.startswith("/api/"):
+        auth = request.authorization
+        if auth and auth.username and auth.password is not None:
+            expected = _basic_auth_users.get(auth.username)
+            if expected is not None and secrets.compare_digest(auth.password, expected):
+                return None
+        return Response("Authentication required", 401,
+                        {"WWW-Authenticate": 'Basic realm="api"'})
+    # 그 외 비-GET 은 401 (CSRF 토큰 없는 웹 폼은 어차피 거부됨)
+    if request.method != "GET":
         return Response("Authentication required", 401)
     return redirect(url_for("login_view", next=request.path))
 
