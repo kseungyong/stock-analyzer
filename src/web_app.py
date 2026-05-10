@@ -1701,8 +1701,18 @@ def stock_view(symbol: str):
     return _page(f"{name} 분석 결과", "".join(body_parts))
 
 
+def _format_price(price: float, market: str) -> str:
+    """미국주식 → $1,234.56, 한국주식 → 12,345원."""
+    if market == "us":
+        return f"${price:,.2f}"
+    return f"{price:,.0f}원"
+
+
 def _render_pattern_section(row: dict) -> str:
-    """5 카테고리 패턴 분석 섹션 (이동평균/캔들/차트/지지저항/경고)."""
+    """5 카테고리 패턴 분석 섹션 (이동평균/캔들/차트/지지저항/경고).
+
+    market 별 통화: us → $1,234.56 / korea → 12,345원
+    """
     import json as _json
     pj_str = row.get("pattern_json")
     if not pj_str:
@@ -1711,6 +1721,9 @@ def _render_pattern_section(row: dict) -> str:
         pj = _json.loads(pj_str)
     except (ValueError, TypeError):
         return ""
+
+    market = row.get("market", "korea")
+    fp = lambda p: _format_price(float(p), market)  # noqa: E731
 
     summary = pj.get("summary") or {}
     ma = pj.get("ma_state") or {}
@@ -1723,7 +1736,6 @@ def _render_pattern_section(row: dict) -> str:
                  "약매도": "#EA580C", "사지마": "#D97706", "팔지마": "#D97706"}.get(
                      summary.get("signal", "관망"), "#64748B")
 
-    # 종합 헤더
     score = summary.get("score", 0)
     sign = "+" if score >= 0 else ""
     tops = " · ".join(summary.get("top_patterns") or []) or "(패턴 없음)"
@@ -1745,9 +1757,9 @@ def _render_pattern_section(row: dict) -> str:
         if ma_info:
             ma_extra = (
                 f' <small style="color:#64748B;">'
-                f'SMA5: {ma_info.get("sma5", 0):.0f} / '
-                f'SMA50: {ma_info.get("sma50", 0):.0f} / '
-                f'SMA200: {ma_info.get("sma200", 0):.0f}</small>'
+                f'SMA5: {fp(ma_info.get("sma5", 0))} / '
+                f'SMA50: {fp(ma_info.get("sma50", 0))} / '
+                f'SMA200: {fp(ma_info.get("sma200", 0))}</small>'
             )
         parts.append(f"""
       <h3 style="margin-top:1rem;">📈 이동평균 (4상태)</h3>
@@ -1757,7 +1769,7 @@ def _render_pattern_section(row: dict) -> str:
       <p>{ma_extra}</p>
     """)
 
-    # 2. 캔들 패턴 (최근)
+    # 2. 캔들 패턴
     if candles:
         rows = []
         for c in candles[:8]:
@@ -1772,7 +1784,7 @@ def _render_pattern_section(row: dict) -> str:
       <ul style="margin:0.25rem 0 0.5rem 1.25rem;">{"".join(rows)}</ul>
     """)
 
-    # 3. 차트 패턴 (구간 정보 포함 — 사용자 요청)
+    # 3. 차트 패턴 (구간 정보 + 통화 명시)
     if chart:
         rows = []
         for cp in chart:
@@ -1782,23 +1794,25 @@ def _render_pattern_section(row: dict) -> str:
             to_d = cp.get("to_date", "")
             dur = cp.get("duration_days", 0)
             range_str = f" <small>[{from_d} ~ {to_d}, {dur}일]</small>" if from_d else ""
+            # 패턴별 raw price 로 details 빌드 (통화 명시)
+            details = _build_chart_pattern_details(cp, fp)
             rows.append(
                 f'<li><span style="color:{ccolor};font-weight:600;">{escape(cp.get("name",""))}</span>'
                 f' — {escape(csig)} (신뢰도 {cp.get("confidence",0)*100:.0f}%){range_str}'
-                f'<br><small style="color:#475569;">{escape(cp.get("details",""))}</small></li>'
+                f'<br><small style="color:#475569;">{details}</small></li>'
             )
         parts.append(f"""
       <h3 style="margin-top:1rem;">📊 차트 패턴 (구간 표시)</h3>
       <ul style="margin:0.25rem 0 0.5rem 1.25rem;">{"".join(rows)}</ul>
     """)
 
-    # 4. 지지/저항
+    # 4. 지지/저항 (통화 명시)
     if sr:
         rows = []
         for level in sr:
             lcolor = "#DC2626" if level.get("type") == "저항" else "#16A34A"
             rows.append(
-                f'<li><span style="color:{lcolor};font-weight:600;">{level.get("price", 0):,.0f}원</span> '
+                f'<li><span style="color:{lcolor};font-weight:600;">{fp(level.get("price", 0))}</span> '
                 f'— {escape(level.get("type", ""))} '
                 f'<small>({level.get("touches", 0)}회 반응, '
                 f'현재 대비 {level.get("distance_pct", 0):+.1f}%)</small></li>'
@@ -1821,6 +1835,51 @@ def _render_pattern_section(row: dict) -> str:
 
     parts.append("</div>")
     return "".join(parts)
+
+
+def _build_chart_pattern_details(cp: dict, fp) -> str:
+    """차트 패턴의 raw 가격 fields → 통화 명시된 한국어 details.
+
+    fp: 가격 포맷 함수 (lambda p: _format_price(p, market)).
+    raw fields 가 있으면 새 details 빌드, 없으면 cp["details"] 그대로 (구버전 cache).
+    """
+    name = cp.get("name", "")
+    if name == "더블바텀(W)":
+        l1 = cp.get("low1", {})
+        l2 = cp.get("low2", {})
+        if l1 and l2:
+            cur = cp.get("current")
+            neck = cp.get("neckline")
+            br = " — 넥라인 돌파!" if cp.get("breakout") else " — 넥라인 미돌파"
+            return (
+                f"저점1 {escape(l1.get('date',''))} {fp(l1.get('price', 0))} → "
+                f"저점2 {escape(l2.get('date',''))} {fp(l2.get('price', 0))} "
+                f"(넥라인 {fp(neck) if neck else '?'}, 현재 {fp(cur) if cur else '?'}{br})"
+            )
+    elif name == "더블탑(M)":
+        h1 = cp.get("high1", {})
+        h2 = cp.get("high2", {})
+        if h1 and h2:
+            cur = cp.get("current")
+            neck = cp.get("neckline")
+            bd = " — 넥라인 이탈!" if cp.get("breakdown") else " — 넥라인 유지"
+            return (
+                f"고점1 {escape(h1.get('date',''))} {fp(h1.get('price', 0))} → "
+                f"고점2 {escape(h2.get('date',''))} {fp(h2.get('price', 0))} "
+                f"(넥라인 {fp(neck) if neck else '?'}, 현재 {fp(cur) if cur else '?'}{bd})"
+            )
+    elif name in ("역헤드앤숄더", "헤드앤숄더"):
+        l = cp.get("left_shoulder", {})
+        h = cp.get("head", {})
+        r = cp.get("right_shoulder", {})
+        if l and h and r:
+            return (
+                f"좌어깨 {escape(l.get('date',''))} {fp(l.get('price', 0))} / "
+                f"헤드 {escape(h.get('date',''))} {fp(h.get('price', 0))} / "
+                f"우어깨 {escape(r.get('date',''))} {fp(r.get('price', 0))}"
+            )
+    # 삼각형 등 — slope 만 (통화 무관)
+    return escape(cp.get("details", ""))
 
 
 @app.route("/stock/all")
