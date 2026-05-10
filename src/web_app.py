@@ -2538,7 +2538,15 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
         {pnl_text}
       </div>
       <div style="font-size:0.85rem;color:var(--slate-700);margin-top:4px;">
-        평균 {avg_str} → 현재 {last_str} · {qty}주 (평가 {eval_str})
+        평균 {avg_str}<button type="button" data-edit-avg-price
+          data-symbol="{escape(sym)}" data-current="{avg}" data-market="{market}"
+          style="background:transparent;border:none;cursor:pointer;color:var(--slate-500);
+          font-size:0.75rem;padding:0 4px;" title="평균가 수정">✏️</button>
+        → 현재 {last_str} · {qty}주<button type="button" data-edit-qty
+          data-symbol="{escape(sym)}" data-current="{qty}"
+          style="background:transparent;border:none;cursor:pointer;color:var(--slate-500);
+          font-size:0.75rem;padding:0 4px;" title="수량 수정">✏️</button>
+        (평가 {eval_str})
       </div>
       {fresh_line}
       {notes_html}
@@ -2693,26 +2701,72 @@ def portfolio_view():
           <p>아직 등록된 보유 종목이 없습니다. 위 폼으로 추가해보세요.</p>
         </div>"""
 
-    notes_form = f"""
-    <form id="notes-edit-form" method="post" action="/portfolio/update" style="display:none;">
+    update_form = f"""
+    <form id="portfolio-update-form" method="post" action="/portfolio/update" style="display:none;">
       {_csrf_input()}
-      <input type="hidden" name="symbol" id="notes-edit-symbol">
-      <input type="hidden" name="notes" id="notes-edit-notes">
+      <input type="hidden" name="symbol" id="update-symbol">
+      <input type="hidden" name="avg_price" disabled>
+      <input type="hidden" name="qty" disabled>
+      <input type="hidden" name="notes" disabled>
     </form>"""
 
-    notes_js = """
+    update_js = """
 <script>
-document.addEventListener('click', function(e) {
-  const btn = e.target.closest('[data-edit-notes]');
-  if (!btn) return;
-  const symbol = btn.dataset.symbol;
-  const current = btn.dataset.notes || '';
-  const next = window.prompt('메모를 입력하세요 (빈 값이면 제거)', current);
-  if (next === null) return;
-  document.getElementById('notes-edit-symbol').value = symbol;
-  document.getElementById('notes-edit-notes').value = next;
-  document.getElementById('notes-edit-form').submit();
-});
+(function() {
+  const FORM = document.getElementById('portfolio-update-form');
+  const FIELDS = ['avg_price', 'qty', 'notes'];
+
+  function submitUpdate(symbol, field, value) {
+    document.getElementById('update-symbol').value = symbol;
+    FIELDS.forEach(f => {
+      const el = FORM.querySelector(`input[name="${f}"]`);
+      if (f === field) {
+        el.disabled = false;
+        el.value = value;
+      } else {
+        el.disabled = true;
+      }
+    });
+    FORM.submit();
+  }
+
+  document.addEventListener('click', function(e) {
+    let btn = e.target.closest('[data-edit-notes]');
+    if (btn) {
+      const cur = btn.dataset.notes || '';
+      const next = window.prompt('메모를 입력하세요 (빈 값이면 제거)', cur);
+      if (next === null) return;
+      submitUpdate(btn.dataset.symbol, 'notes', next);
+      return;
+    }
+    btn = e.target.closest('[data-edit-avg-price]');
+    if (btn) {
+      const cur = btn.dataset.current || '';
+      const next = window.prompt('새 평균가를 입력하세요 (>0)', cur);
+      if (next === null) return;
+      const v = parseFloat(next);
+      if (!isFinite(v) || v <= 0) {
+        alert('평균가는 0보다 큰 숫자여야 합니다.');
+        return;
+      }
+      submitUpdate(btn.dataset.symbol, 'avg_price', String(v));
+      return;
+    }
+    btn = e.target.closest('[data-edit-qty]');
+    if (btn) {
+      const cur = btn.dataset.current || '';
+      const next = window.prompt('새 수량을 입력하세요 (≥0)', cur);
+      if (next === null) return;
+      const v = parseInt(next, 10);
+      if (!isFinite(v) || v < 0) {
+        alert('수량은 0 이상의 정수여야 합니다.');
+        return;
+      }
+      submitUpdate(btn.dataset.symbol, 'qty', String(v));
+      return;
+    }
+  });
+})();
 </script>"""
 
     body = f"""
@@ -2725,8 +2779,8 @@ document.addEventListener('click', function(e) {
     {add_form}
     {sort_bar}
     {cards_html}
-    {notes_form}"""
-    return _page("포트폴리오", body, _AUTOCOMPLETE_JS + notes_js)
+    {update_form}"""
+    return _page("포트폴리오", body, _AUTOCOMPLETE_JS + update_js)
 
 
 @app.route("/portfolio/add", methods=["POST"])
