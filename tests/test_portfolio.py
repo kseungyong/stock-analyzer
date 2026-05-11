@@ -205,3 +205,166 @@ def test_migration_idempotent(tmp_path, monkeypatch):
     p.init_db()
     assert len(p.list_holdings("admin")) == 1
     assert p.list_holdings("admin")[0]["avg_price"] == 150.0
+
+
+# --- Transactions: record_buy / record_sell / record_adjust / list ---------
+
+def test_buy_first_time_creates_holding():
+    new_state = p.record_buy("admin", "AAPL", 150.0, 10, "초기 매수")
+    assert new_state == {"avg_price": 150.0, "qty": 10}
+    h = p.list_holdings("admin")[0]
+    assert h["symbol"] == "AAPL"
+    assert h["avg_price"] == 150.0
+    assert h["qty"] == 10
+    txs = p.list_transactions("admin")
+    assert len(txs) == 1
+    assert txs[0]["side"] == "BUY"
+    assert txs[0]["price"] == 150.0
+    assert txs[0]["qty"] == 10
+
+
+def test_buy_recomputes_weighted_avg():
+    """10주 @ 100원 → 추가 10주 @ 200원 → 평균 150원, 20주."""
+    p.record_buy("admin", "AAPL", 100.0, 10)
+    p.record_buy("admin", "AAPL", 200.0, 10)
+    h = p.list_holdings("admin")[0]
+    assert h["avg_price"] == 150.0
+    assert h["qty"] == 20
+
+
+def test_buy_recomputes_weighted_avg_uneven():
+    """5주 @ 100원 + 15주 @ 200원 → (500 + 3000)/20 = 175원."""
+    p.record_buy("admin", "AAPL", 100.0, 5)
+    p.record_buy("admin", "AAPL", 200.0, 15)
+    h = p.list_holdings("admin")[0]
+    assert h["avg_price"] == 175.0
+    assert h["qty"] == 20
+    txs = p.list_transactions("admin", "AAPL")
+    assert len(txs) == 2
+
+
+def test_buy_invalid_price_raises():
+    with pytest.raises(ValueError):
+        p.record_buy("admin", "AAPL", 0, 10)
+    with pytest.raises(ValueError):
+        p.record_buy("admin", "AAPL", -10, 10)
+
+
+def test_buy_invalid_qty_raises():
+    with pytest.raises(ValueError):
+        p.record_buy("admin", "AAPL", 150.0, 0)
+    with pytest.raises(ValueError):
+        p.record_buy("admin", "AAPL", 150.0, -5)
+
+
+def test_sell_partial_keeps_avg():
+    """매도 시 평균가 유지 (cost basis)."""
+    p.record_buy("admin", "AAPL", 150.0, 10)
+    new_state = p.record_sell("admin", "AAPL", 200.0, 3)
+    assert new_state == {"avg_price": 150.0, "qty": 7}
+    h = p.list_holdings("admin")[0]
+    assert h["avg_price"] == 150.0
+    assert h["qty"] == 7
+
+
+def test_sell_full_deletes_holding():
+    """전량 매도 → portfolio row 삭제, transactions 유지."""
+    p.record_buy("admin", "AAPL", 150.0, 10)
+    result = p.record_sell("admin", "AAPL", 200.0, 10)
+    assert result is None
+    assert p.list_holdings("admin") == []
+    # transactions 는 BUY + SELL 모두 보존
+    txs = p.list_transactions("admin", "AAPL")
+    assert len(txs) == 2
+    assert {t["side"] for t in txs} == {"BUY", "SELL"}
+
+
+def test_sell_exceeds_holding_raises():
+    p.record_buy("admin", "AAPL", 150.0, 10)
+    with pytest.raises(ValueError):
+        p.record_sell("admin", "AAPL", 200.0, 11)
+
+
+def test_sell_missing_holding_raises():
+    with pytest.raises(ValueError):
+        p.record_sell("admin", "AAPL", 200.0, 5)
+
+
+def test_adjust_records_audit_transaction():
+    p.add_holding("admin", "AAPL", 150.0, 10)  # 초기 add 는 tx 안 남김 (legacy)
+    ok = p.record_adjust("admin", "AAPL", avg_price=160.0)
+    assert ok is True
+    h = p.list_holdings("admin")[0]
+    assert h["avg_price"] == 160.0
+    txs = p.list_transactions("admin", "AAPL")
+    assert any(t["side"] == "ADJUST" for t in txs)
+
+
+def test_list_transactions_filters_by_symbol():
+    p.record_buy("admin", "AAPL", 100.0, 10)
+    p.record_buy("admin", "MSFT", 300.0, 5)
+    p.record_buy("admin", "AAPL", 200.0, 5)
+    aapl = p.list_transactions("admin", "AAPL")
+    msft = p.list_transactions("admin", "MSFT")
+    all_ = p.list_transactions("admin")
+    assert len(aapl) == 2
+    assert len(msft) == 1
+    assert len(all_) == 3
+
+
+def test_list_transactions_user_isolation():
+    p.record_buy("admin", "AAPL", 100.0, 10)
+    p.record_buy("shnoh", "AAPL", 200.0, 5)
+    admin_txs = p.list_transactions("admin")
+    shnoh_txs = p.list_transactions("shnoh")
+    assert len(admin_txs) == 1 and admin_txs[0]["price"] == 100.0
+    assert len(shnoh_txs) == 1 and shnoh_txs[0]["price"] == 200.0
+
+
+def test_seed_creates_buy_tx_for_existing_holdings(tmp_path, monkeypatch):
+    """init_db 이전에 portfolio 에 보유분 있고 transactions 비어있으면 seed."""
+    db_path = tmp_path / "seed.db"
+    monkeypatch.setattr(p, "_DB_PATH", db_path)
+    monkeypatch.setattr(ac, "_DB_PATH", db_path)
+    # 신 스키마로 portfolio 만 만들고 데이터 삽입 (transactions 테이블 없이)
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE portfolio (
+            username TEXT NOT NULL, symbol TEXT NOT NULL,
+            avg_price REAL NOT NULL, qty INTEGER NOT NULL,
+            added_at INTEGER NOT NULL, notes TEXT,
+            PRIMARY KEY (username, symbol)
+        );
+    """)
+    conn.execute(
+        "INSERT INTO portfolio VALUES ('admin', 'AAPL', 150.0, 10, 1000, NULL)")
+    conn.execute(
+        "INSERT INTO portfolio VALUES ('admin', 'MSFT', 300.0, 5, 1000, NULL)")
+    conn.commit()
+    conn.close()
+    p.init_db()
+    txs = p.list_transactions("admin")
+    assert len(txs) == 2
+    syms = {t["symbol"] for t in txs}
+    assert syms == {"AAPL", "MSFT"}
+    for t in txs:
+        assert t["side"] == "BUY"
+        assert "seed" in t["notes"].lower() or "초기" in t["notes"]
+
+
+def test_seed_idempotent_does_not_duplicate(tmp_path, monkeypatch):
+    """init_db() 두 번 호출해도 transactions 중복 생성 안 됨."""
+    db_path = tmp_path / "seed_idem.db"
+    monkeypatch.setattr(p, "_DB_PATH", db_path)
+    monkeypatch.setattr(ac, "_DB_PATH", db_path)
+    p.init_db()
+    ac.init_db()
+    p.add_holding("admin", "AAPL", 150.0, 10)
+    p.init_db()
+    p.init_db()
+    # add_holding 은 tx 안 남기지만 seed 도 안 돌아야 함 (이미 transactions 테이블 존재)
+    # 단, transactions 가 비어있다면 seed 가 BUY 하나 생성 → 멱등성 두 번째 init 에서 변동 없음
+    txs1 = p.list_transactions("admin")
+    p.init_db()
+    txs2 = p.list_transactions("admin")
+    assert len(txs1) == len(txs2)

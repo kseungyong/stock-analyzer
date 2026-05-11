@@ -2668,7 +2668,16 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
       </div>
       {fresh_line}
       {notes_html}
-      <div class="stock-card-actions" style="margin-top:10px;">
+      <div class="stock-card-actions" style="margin-top:10px;flex-wrap:wrap;">
+        <button type="button" data-tx-buy data-symbol="{escape(sym)}"
+                data-market="{market}" data-last="{last if last is not None else ''}"
+                class="btn btn-sm" style="background:#DCFCE7;color:#15803D;">📈 추가매수</button>
+        <button type="button" data-tx-sell data-symbol="{escape(sym)}"
+                data-market="{market}" data-last="{last if last is not None else ''}"
+                data-max-qty="{qty}"
+                class="btn btn-sm" style="background:#FEE2E2;color:#991B1B;">📉 매도</button>
+        <a class="btn btn-sm" style="background:var(--slate-100);color:var(--slate-700);"
+           href="/portfolio/history/{escape(sym)}">📜 이력</a>
         <a class="btn btn-primary btn-sm" href="/stock/{escape(sym)}">상세 분석 →</a>
         <form method="post" action="/portfolio/delete" style="display:inline;margin:0;"
               onsubmit="return confirm('{escape(sym)} 보유 종목을 삭제하시겠습니까?');">
@@ -2849,6 +2858,46 @@ def portfolio_view():
           <button type="button" id="edit-modal-save" class="btn btn-sm btn-primary">저장</button>
         </div>
       </div>
+    </div>
+
+    <!-- 매수/매도 거래 모달 (단가 + 수량 + 메모) -->
+    <form id="tx-form" method="post" action="" style="display:none;">
+      {_csrf_input()}
+      <input type="hidden" name="symbol" id="tx-symbol">
+      <input type="hidden" name="price" id="tx-price">
+      <input type="hidden" name="qty" id="tx-qty">
+      <input type="hidden" name="notes" id="tx-notes">
+    </form>
+    <div id="tx-modal" role="dialog" aria-labelledby="tx-modal-title"
+         style="position:fixed;inset:0;background:rgba(15,23,42,0.55);
+         display:none;align-items:center;justify-content:center;z-index:1000;
+         padding:16px;">
+      <div style="background:#fff;border-radius:8px;max-width:440px;width:100%;
+                  padding:20px;box-shadow:0 12px 32px rgba(0,0,0,0.2);">
+        <h3 id="tx-modal-title" style="margin:0 0 4px 0;font-size:1.1rem;">📈 추가 매수</h3>
+        <div id="tx-modal-symbol" style="font-size:0.85rem;color:var(--slate-500);margin-bottom:14px;"></div>
+        <label style="font-size:0.85rem;color:var(--slate-700);">단가</label>
+        <input id="tx-input-price" type="number" step="any" min="0.000001"
+               style="width:100%;padding:10px;border:1.5px solid var(--slate-300);
+               border-radius:6px;font-size:1rem;margin:4px 0 12px 0;box-sizing:border-box;">
+        <label style="font-size:0.85rem;color:var(--slate-700);">
+          수량 <span id="tx-qty-hint" style="color:var(--slate-500);font-size:0.78rem;"></span>
+        </label>
+        <input id="tx-input-qty" type="number" step="1" min="1"
+               style="width:100%;padding:10px;border:1.5px solid var(--slate-300);
+               border-radius:6px;font-size:1rem;margin:4px 0 12px 0;box-sizing:border-box;">
+        <label style="font-size:0.85rem;color:var(--slate-700);">메모 (선택)</label>
+        <input id="tx-input-notes" type="text" maxlength="200"
+               style="width:100%;padding:10px;border:1.5px solid var(--slate-300);
+               border-radius:6px;font-size:1rem;margin:4px 0 0 0;box-sizing:border-box;">
+        <div id="tx-modal-error" role="alert"
+             style="color:#DC2626;font-size:0.85rem;margin-top:6px;min-height:1.2em;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+          <button type="button" id="tx-modal-cancel" class="btn btn-sm"
+                  style="background:var(--slate-100);color:var(--slate-700);">취소</button>
+          <button type="button" id="tx-modal-submit" class="btn btn-sm btn-primary">실행</button>
+        </div>
+      </div>
     </div>"""
 
     update_js = """
@@ -2954,6 +3003,85 @@ def portfolio_view():
       return;
     }
   });
+
+  // ---- Transaction modal (BUY / SELL) ----
+  const txModal = document.getElementById('tx-modal');
+  const txForm = document.getElementById('tx-form');
+  const txTitle = document.getElementById('tx-modal-title');
+  const txSymbol = document.getElementById('tx-modal-symbol');
+  const txInputPrice = document.getElementById('tx-input-price');
+  const txInputQty = document.getElementById('tx-input-qty');
+  const txInputNotes = document.getElementById('tx-input-notes');
+  const txQtyHint = document.getElementById('tx-qty-hint');
+  const txError = document.getElementById('tx-modal-error');
+  const txCancel = document.getElementById('tx-modal-cancel');
+  const txSubmit = document.getElementById('tx-modal-submit');
+
+  let txPending = null;
+
+  function openTxModal(action, btn) {
+    const sym = btn.dataset.symbol;
+    const last = parseFloat(btn.dataset.last || '');
+    const maxQty = parseInt(btn.dataset.maxQty || '0', 10);
+    txPending = {action, symbol: sym, maxQty: maxQty};
+    if (action === 'buy') {
+      txTitle.textContent = '📈 추가 매수';
+      txQtyHint.textContent = '';
+      txForm.action = '/portfolio/buy';
+    } else {
+      txTitle.textContent = '📉 매도';
+      txQtyHint.textContent = `(보유 ${maxQty}주 이하)`;
+      txForm.action = '/portfolio/sell';
+    }
+    txSymbol.textContent = sym;
+    txInputPrice.value = isFinite(last) ? last : '';
+    txInputQty.value = '';
+    txInputNotes.value = '';
+    txError.textContent = '';
+    txModal.style.display = 'flex';
+    setTimeout(() => txInputPrice.focus(), 0);
+  }
+  function closeTxModal() {
+    txModal.style.display = 'none';
+    txPending = null;
+  }
+  function submitTx() {
+    if (!txPending) return;
+    const price = parseFloat(txInputPrice.value);
+    const qty = parseInt(txInputQty.value, 10);
+    if (!isFinite(price) || price <= 0) {
+      txError.textContent = '단가는 0보다 큰 숫자여야 합니다.';
+      return;
+    }
+    if (!isFinite(qty) || qty <= 0) {
+      txError.textContent = '수량은 1 이상의 정수여야 합니다.';
+      return;
+    }
+    if (txPending.action === 'sell' && qty > txPending.maxQty) {
+      txError.textContent = `매도 수량이 보유 (${txPending.maxQty}주) 초과.`;
+      return;
+    }
+    document.getElementById('tx-symbol').value = txPending.symbol;
+    document.getElementById('tx-price').value = String(price);
+    document.getElementById('tx-qty').value = String(qty);
+    document.getElementById('tx-notes').value = txInputNotes.value;
+    txForm.submit();
+  }
+
+  txCancel.addEventListener('click', closeTxModal);
+  txSubmit.addEventListener('click', submitTx);
+  txModal.addEventListener('click', (e) => { if (e.target === txModal) closeTxModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (txModal.style.display === 'none' || !txModal.style.display) return;
+    if (e.key === 'Escape') closeTxModal();
+    else if (e.key === 'Enter') { e.preventDefault(); submitTx(); }
+  });
+  document.addEventListener('click', (e) => {
+    const buy = e.target.closest('[data-tx-buy]');
+    if (buy) { openTxModal('buy', buy); return; }
+    const sell = e.target.closest('[data-tx-sell]');
+    if (sell) { openTxModal('sell', sell); return; }
+  });
 })();
 </script>"""
 
@@ -2991,11 +3119,115 @@ def portfolio_add():
         return redirect(url_for("portfolio_view", error="평균가/수량이 숫자여야 합니다."), code=303)
     user = _current_user()
     try:
-        portfolio_db.add_holding(user, symbol, avg_price, qty, notes=notes)
+        # 신규 추가 → record_buy 로 기록 (transactions 에도 BUY 남김)
+        portfolio_db.record_buy(user, symbol, avg_price, qty, notes=notes)
     except ValueError as e:
         return redirect(url_for("portfolio_view", error=str(e)), code=303)
     logger.info("portfolio.add user=%s %s avg=%s qty=%s", user, symbol, avg_price, qty)
     return redirect(url_for("portfolio_view"), code=303)
+
+
+@app.route("/portfolio/buy", methods=["POST"])
+def portfolio_buy():
+    """추가 매수 — 가중평균 자동 재계산."""
+    _csrf_validate()
+    symbol = request.form.get("symbol", "").strip()
+    price_s = request.form.get("price", "").strip()
+    qty_s = request.form.get("qty", "").strip()
+    notes = (request.form.get("notes") or "").strip() or None
+    if not symbol:
+        return redirect(url_for("portfolio_view"), code=303)
+    try:
+        price = float(price_s)
+        qty = int(qty_s)
+    except ValueError:
+        return redirect(url_for("portfolio_view", error="단가/수량 숫자 오류"), code=303)
+    user = _current_user()
+    try:
+        portfolio_db.record_buy(user, symbol, price, qty, notes=notes)
+    except ValueError as e:
+        return redirect(url_for("portfolio_view", error=str(e)), code=303)
+    return redirect(url_for("portfolio_view"), code=303)
+
+
+@app.route("/portfolio/sell", methods=["POST"])
+def portfolio_sell():
+    """매도 — 평균가 cost basis 유지, 수량 차감. 0주 시 자동 삭제."""
+    _csrf_validate()
+    symbol = request.form.get("symbol", "").strip()
+    price_s = request.form.get("price", "").strip()
+    qty_s = request.form.get("qty", "").strip()
+    notes = (request.form.get("notes") or "").strip() or None
+    if not symbol:
+        return redirect(url_for("portfolio_view"), code=303)
+    try:
+        price = float(price_s)
+        qty = int(qty_s)
+    except ValueError:
+        return redirect(url_for("portfolio_view", error="단가/수량 숫자 오류"), code=303)
+    user = _current_user()
+    try:
+        portfolio_db.record_sell(user, symbol, price, qty, notes=notes)
+    except ValueError as e:
+        return redirect(url_for("portfolio_view", error=str(e)), code=303)
+    return redirect(url_for("portfolio_view"), code=303)
+
+
+@app.route("/portfolio/history/<path:symbol>")
+def portfolio_history(symbol: str):
+    """거래 이력 페이지 — 종목별 BUY/SELL/ADJUST 시계열."""
+    symbol = sanitize_stock_symbol(symbol)
+    user = _current_user()
+    txs = portfolio_db.list_transactions(user, symbol, limit=200)
+    current = portfolio_db.get_holding_with_pnl(user, symbol)
+    market = (current.get("market") if current else None) or _market_of(symbol)
+
+    rows_html = []
+    for t in txs:
+        side_color = {"BUY": "#16A34A", "SELL": "#DC2626",
+                      "ADJUST": "#D97706"}.get(t["side"], "var(--slate-500)")
+        side_ko = {"BUY": "매수", "SELL": "매도",
+                   "ADJUST": "조정"}.get(t["side"], t["side"])
+        rows_html.append(
+            f'<tr>'
+            f'<td>{_format_kst(t["ts"])}</td>'
+            f'<td style="color:{side_color};font-weight:600;">{side_ko}</td>'
+            f'<td style="text-align:right;">{_format_price(t["price"], market)}</td>'
+            f'<td style="text-align:right;">{t["qty"]}</td>'
+            f'<td style="color:var(--slate-500);">{escape(t["notes"] or "")}</td>'
+            f'</tr>'
+        )
+    table_html = (
+        '<table style="width:100%;border-collapse:collapse;">'
+        '<thead><tr style="border-bottom:2px solid var(--slate-200);">'
+        '<th style="text-align:left;padding:8px;">시각</th>'
+        '<th style="text-align:left;padding:8px;">유형</th>'
+        '<th style="text-align:right;padding:8px;">단가</th>'
+        '<th style="text-align:right;padding:8px;">수량</th>'
+        '<th style="text-align:left;padding:8px;">메모</th>'
+        '</tr></thead>'
+        f'<tbody>{"".join(rows_html)}</tbody></table>'
+        if txs else
+        '<p style="color:var(--slate-500);">거래 이력 없음.</p>'
+    )
+
+    cur_state = ""
+    if current:
+        cur_state = (
+            f'<div class="card" style="margin-bottom:16px;">'
+            f'현재 보유: 평균 <strong>{_format_price(current["avg_price"], market)}</strong> '
+            f'× {current["qty"]}주'
+            f'</div>'
+        )
+
+    body = f"""
+    <div class="page-header">
+      <h1>{escape(symbol)} 거래 이력</h1>
+      <p><a href="/portfolio">← 포트폴리오</a></p>
+    </div>
+    {cur_state}
+    <div class="card">{table_html}</div>"""
+    return _page(f"{symbol} 거래 이력", body)
 
 
 @app.route("/portfolio/update", methods=["POST"])
