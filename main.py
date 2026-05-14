@@ -283,6 +283,12 @@ def main():
     scan_parser.add_argument("--days", type=int, default=5, help="조회 기간 (기본: 5일)")
     scan_parser.add_argument("--top", type=int, default=20, help="상위 N개 (기본: 20)")
 
+    # 단발 cron 서브커맨드 (launchd 분리 운영용)
+    auto_parser = subparsers.add_parser("auto-analyze", help="시장 자동분석 (launchd cron 용)")
+    auto_parser.add_argument("market", choices=["korea", "us"])
+    subparsers.add_parser("backfill", help="예측 히스토리 backfill (launchd cron 용)")
+    subparsers.add_parser("daily-email", help="다이제스트 이메일 발송 (launchd cron 용)")
+
     # 기존 옵션
     parser.add_argument("--run-now", action="store_true", help="즉시 분석 실행")
     parser.add_argument("--symbol", type=str, help="특정 종목 분석 (예: AAPL)")
@@ -295,6 +301,18 @@ def main():
 
     if args.command == "scan":
         run_scan(args)
+        return
+
+    if args.command == "auto-analyze":
+        auto_analyze_market(args.market)
+        return
+
+    if args.command == "backfill":
+        prediction_history.backfill_all(fetch_fn=fetch_stock_data)
+        return
+
+    if args.command == "daily-email":
+        daily_email_job()
         return
 
     if args.web:
