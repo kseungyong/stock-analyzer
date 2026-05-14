@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS leaders (
     user_narrative_expansion TEXT,
     user_bottleneck          TEXT,
     user_moat                TEXT,
+    user_notes               TEXT,
     user_edited_at           INTEGER,
     user_edited_by           TEXT,
 
@@ -197,6 +198,17 @@ def update_user_fields(symbol: str, fields: dict[str, str], user: str) -> None:
         with conn:  # transaction
             conn.execute(
                 f"UPDATE leaders SET {','.join(sets)} WHERE symbol=?", params,
+            )
+
+
+def update_user_notes(symbol: str, notes: str, user: str) -> None:
+    """사용자 자유 메모 저장 — user_notes 컬럼 단독 갱신."""
+    with _connect() as conn:
+        with conn:  # transaction
+            conn.execute(
+                "UPDATE leaders SET user_notes=?, user_edited_at=?, user_edited_by=? "
+                "WHERE symbol=?",
+                (notes, int(time.time()), user, symbol),
             )
 
 

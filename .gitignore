@@ -3,6 +3,7 @@ __pycache__/
 .env
 !.env.example
 *.html
+!src/templates/*.html
 .DS_Store
 .cache/
 .claude/

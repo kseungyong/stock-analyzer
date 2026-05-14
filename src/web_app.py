@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from flask import Flask, abort, request, redirect, session, url_for, jsonify, Response
+from flask import Flask, abort, request, redirect, session, url_for, jsonify, Response, render_template
 
 try:
     from dotenv import load_dotenv
@@ -982,6 +982,7 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
   </a>
   <div class="topbar-nav">
     <a class="topbar-link" href="/">대시보드</a>
+    <a class="topbar-link" href="/leaders">주도주</a>
     <a class="topbar-link" href="/portfolio">포트폴리오</a>
     <a class="topbar-link" href="/jobs">작업 내역</a>
     {user_badge}
@@ -2351,6 +2352,111 @@ def api_universe_delete(symbol: str):
     return jsonify({
         "removed": True, "symbol": sym, "market": removed_market,
     }), 200
+
+
+# ─── 주도주 발굴 (Leader Stock Finder, Spec 2026-05-15) ─────────────────────
+
+
+def _current_username() -> str:
+    """Session 인증 username 또는 Basic Auth username, 둘 다 없으면 'anonymous'.
+
+    Spec §4.3: update_user_fields 의 user 인자 결정 헬퍼.
+    ENABLE_BASIC_AUTH=0 환경에서도 session 우선 확인 후 Basic Auth 폴백.
+    """
+    if session.get("username"):
+        return str(session["username"])
+    auth = request.authorization
+    if auth and auth.username:
+        return str(auth.username)
+    return "anonymous"
+
+
+@app.route("/leaders")
+def leaders_list():
+    """GET /leaders — 통과 종목 표 (passed=1 AND status='active')."""
+    from src import leader_cache as lc
+    rows = lc.list_active()
+    app.logger.debug("leaders_list: %d 종목", len(rows))
+    return render_template("leaders.html", rows=rows)
+
+
+@app.route("/leaders/<path:symbol>")
+def leaders_detail(symbol: str):
+    """GET /leaders/<symbol> — 5축 스코어카드 + LLM 분석 + 메모 폼."""
+    from src import leader_cache as lc
+    row = lc.get(symbol)
+    if row is None:
+        app.logger.info("leaders_detail: symbol=%s not found → 404", symbol)
+        return render_template("leader_detail.html", row=None, symbol=symbol), 404
+    return render_template(
+        "leader_detail.html", row=row, symbol=symbol,
+        display=lc.display_field,
+        csrf_input=_csrf_input,
+    )
+
+
+@app.route("/leaders/<path:symbol>/notes", methods=["POST"])
+def leaders_notes(symbol: str):
+    """POST /leaders/<symbol>/notes — user_notes 컬럼 저장. Auth required."""
+    _csrf_validate()
+    from src import leader_cache as lc
+    row = lc.get(symbol)
+    if row is None:
+        app.logger.warning("leaders_notes: symbol=%s not found → 404", symbol)
+        abort(404)
+    notes = request.form.get("user_notes", "")
+    user = _current_username()
+    lc.update_user_notes(symbol, notes, user)
+    app.logger.info("leaders_notes: symbol=%s user=%s saved", symbol, user)
+    return redirect(url_for("leaders_detail", symbol=symbol), code=303)
+
+
+@app.route("/leaders/<path:symbol>/refresh-llm", methods=["POST"])
+def leaders_refresh_llm(symbol: str):
+    """POST /leaders/<symbol>/refresh-llm — 단일 LLM 재분석 트리거.
+
+    daily limit 초과 시 429 반환. LLM 결과는 llm_* 컬럼만 갱신 (user_* 보존).
+    """
+    _csrf_validate()
+    from src import leader_cache as lc
+    from src import leader_llm
+    row = lc.get(symbol)
+    if row is None:
+        app.logger.warning("leaders_refresh_llm: symbol=%s not found → 404", symbol)
+        abort(404)
+    inputs = {
+        "symbol": row["symbol"],
+        "name": row["name"],
+        "market": row["market"],
+        "sector": row["sector"],
+        "industry": row["industry"],
+        "market_cap": row["market_cap"] or 0,
+        "return_1y_pct": row["return_1y_pct"] or 0.0,
+        "rel_return_pp": row["rel_return_pp"] or 0.0,
+        "trailing_eps": row["trailing_eps"],
+        "forward_eps": row["forward_eps"],
+        "revenue_growth_pct": row["eps_growth_yoy"] or 0.0,
+        "trailing_pe": row["trailing_pe"],
+    }
+    result = leader_llm.analyze_one(inputs)
+    if result.error == "over_limit":
+        app.logger.warning(
+            "leaders_refresh_llm: daily limit exceeded for symbol=%s", symbol
+        )
+        return jsonify({"error": "daily_limit_exceeded"}), 429
+    if result.error:
+        lc.upsert_llm(
+            symbol, {}, model="gemini-2.5-flash",
+            raw=result.raw, error=result.error,
+        )
+    else:
+        lc.upsert_llm(
+            symbol, result.fields, model="gemini-2.5-flash", raw=result.raw,
+        )
+    app.logger.info(
+        "leaders_refresh_llm: symbol=%s error=%s", symbol, result.error
+    )
+    return redirect(url_for("leaders_detail", symbol=symbol), code=303)
 
 
 @app.route("/backtest/<path:symbol>", methods=["POST"])

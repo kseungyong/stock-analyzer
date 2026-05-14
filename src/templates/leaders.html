@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>주도주 발굴 — Stock Analyzer</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --blue-900: #1E3A8A;
+  --blue-800: #1E40AF;
+  --blue-600: #2563EB;
+  --blue-500: #3B82F6;
+  --blue-100: #DBEAFE;
+  --blue-50:  #EFF6FF;
+  --amber-500: #F59E0B;
+  --red-600:  #DC2626;
+  --red-100:  #FEE2E2;
+  --green-600: #16A34A;
+  --green-100: #DCFCE7;
+  --slate-900: #0F172A;
+  --slate-700: #334155;
+  --slate-500: #64748B;
+  --slate-300: #CBD5E1;
+  --slate-200: #E2E8F0;
+  --slate-100: #F1F5F9;
+  --slate-50:  #F8FAFC;
+  --white: #FFFFFF;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --radius: 10px;
+  --transition: 150ms ease;
+}
+
+html { font-size: 15px; }
+body {
+  font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--slate-50);
+  color: var(--slate-900);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+.topbar {
+  background: var(--blue-800);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  box-shadow: 0 2px 8px rgba(30,64,175,0.3);
+}
+.topbar-brand {
+  color: var(--white);
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-decoration: none;
+}
+.topbar-nav { display: flex; gap: 4px; }
+.topbar-link {
+  color: rgba(255,255,255,0.75);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: background var(--transition), color var(--transition);
+}
+.topbar-link:hover { background: rgba(255,255,255,0.12); color: var(--white); }
+.topbar-link.active { background: rgba(255,255,255,0.18); color: var(--white); }
+
+.main { max-width: 1200px; margin: 0 auto; padding: 28px 20px 48px; }
+
+.page-header { margin-bottom: 24px; }
+.page-header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--blue-900);
+  letter-spacing: -0.02em;
+}
+.page-header p { color: var(--slate-500); font-size: 0.875rem; margin-top: 2px; }
+
+.card {
+  background: var(--white);
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 0;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.data-table thead tr {
+  border-bottom: 2px solid var(--slate-200);
+  background: var(--slate-50);
+}
+.data-table th {
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--slate-500);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.data-table th.num, .data-table td.num { text-align: right; }
+.data-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--slate-100);
+  color: var(--slate-700);
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover td { background: var(--slate-50); }
+
+.mono { font-family: 'Fira Code', monospace; font-size: 0.82rem; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.badge-kospi   { background: var(--blue-100); color: var(--blue-800); }
+.badge-kosdaq  { background: var(--green-100); color: var(--green-600); }
+.badge-pass    { background: var(--green-100); color: var(--green-600); }
+.badge-fail    { background: var(--red-100); color: var(--red-600); }
+.badge-stale   { background: #FEF3C7; color: #92400E; }
+.badge-edited  { background: var(--blue-50); color: var(--blue-800); }
+
+.cond-pass { color: var(--green-600); font-weight: 700; }
+.cond-fail { color: var(--red-600); font-weight: 700; }
+
+.stock-link {
+  color: var(--blue-600);
+  text-decoration: none;
+  font-weight: 600;
+}
+.stock-link:hover { text-decoration: underline; }
+
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--slate-500);
+}
+
+a.topbar-brand svg { opacity: 0.9; }
+</style>
+</head>
+<body>
+<nav class="topbar">
+  <a class="topbar-brand" href="/">📊 Stock Analyzer</a>
+  <div class="topbar-nav">
+    <a class="topbar-link" href="/">대시보드</a>
+    <a class="topbar-link active" href="/leaders">주도주</a>
+    <a class="topbar-link" href="/portfolio">포트폴리오</a>
+    <a class="topbar-link" href="/jobs">작업 내역</a>
+  </div>
+</nav>
+<main class="main">
+  <div class="page-header">
+    <h1>주도주 발굴</h1>
+    <p>주도주 5조건 (가격·이익·밸류·글로벌 트렌드·병목·해자) hard filter 통과 후보 — {{ rows|length }}종목 (KOSPI200 + KOSDAQ150 선별 universe)</p>
+  </div>
+
+  {% if rows %}
+  <div class="card">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>종목</th>
+          <th>시장</th>
+          <th class="num">종가</th>
+          <th class="num">1년 수익률</th>
+          <th class="num">시장 대비</th>
+          <th class="num">신고가 근접</th>
+          <th class="num">EPS</th>
+          <th class="num">PER</th>
+          <th>조건</th>
+          <th>LLM</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>
+            <a class="stock-link" href="/leaders/{{ r['symbol'] }}">{{ r['name'] }}</a><br>
+            <span class="mono" style="color:var(--slate-500);">{{ r['symbol'] }}</span>
+          </td>
+          <td>
+            {% if r['market'] == 'KOSPI' %}
+              <span class="badge badge-kospi">KOSPI</span>
+            {% else %}
+              <span class="badge badge-kosdaq">KOSDAQ</span>
+            {% endif %}
+          </td>
+          <td class="num mono">{{ '{:,.0f}'.format(r['last_close']) }}</td>
+          <td class="num">
+            {% if r['return_1y_pct'] is not none %}
+              {{ '{:+.1%}'.format(r['return_1y_pct']) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">
+            {% if r['rel_return_pp'] is not none %}
+              {{ '{:+.1%}p'.format(r['rel_return_pp']) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">
+            {% if r['near_high_pct'] is not none %}
+              {{ '{:.0%}'.format(r['near_high_pct']) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num mono">
+            {% if r['trailing_eps'] is not none %}
+              {{ '{:,.0f}'.format(r['trailing_eps']) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num mono">
+            {% if r['trailing_pe'] is not none %}
+              {{ '{:.1f}'.format(r['trailing_pe']) }}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <span class="{{ 'cond-pass' if r['cond1_passed'] else 'cond-fail' }}">①</span>
+            <span class="{{ 'cond-pass' if r['cond2_passed'] else 'cond-fail' }}">②</span>
+          </td>
+          <td>
+            {% if r['is_stale'] %}<span class="badge badge-stale">stale</span>{% endif %}
+            {% if r['user_edited_at'] %}<span class="badge badge-edited">수정됨</span>{% endif %}
+            {% if r['llm_tam_narrative'] and not r['is_stale'] %}<span class="badge badge-pass">LLM✓</span>{% endif %}
+            {% if r['llm_error'] %}<span class="badge badge-fail" title="{{ r['llm_error'] }}">오류</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="empty-state">
+      <p>통과 종목이 없습니다. 매일 16:30 KST cron (<code>python main.py leaders-refresh</code>) 이 실행되면 여기에 표시됩니다.</p>
+    </div>
+  </div>
+  {% endif %}
+</main>
+</body>
+</html>
