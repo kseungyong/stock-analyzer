@@ -19,3 +19,4 @@ pytest>=8.0.0
 finance-datareader>=0.9.60
 pykrx>=1.0.45
 TA-Lib>=0.6
+google-generativeai>=0.8.0
