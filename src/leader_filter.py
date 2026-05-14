@@ -35,6 +35,7 @@ class LeaderCandidate:
     trailing_eps: float | None
     forward_eps: float | None
     eps_growth_yoy: float | None
+    revenue_growth_yoy: float | None
     trailing_pe: float | None
     pe_quintile: int | None
     cond1_passed: bool
@@ -123,6 +124,7 @@ def _evaluate_single(
     trailing_eps = info.get("trailingEps")
     forward_eps = info.get("forwardEps")
     eps_growth = info.get("earningsGrowth")
+    revenue_growth = info.get("revenueGrowth")
     trailing_pe = info.get("trailingPE")
 
     cond1a = near_high is not None and near_high >= _NEAR_HIGH_THRESHOLD
@@ -155,6 +157,7 @@ def _evaluate_single(
         trailing_eps=eps_t,
         forward_eps=eps_f,
         eps_growth_yoy=float(eps_growth) if eps_growth is not None else None,
+        revenue_growth_yoy=float(revenue_growth) if revenue_growth is not None else None,
         trailing_pe=float(trailing_pe) if trailing_pe is not None else None,
         pe_quintile=pe_quintile,
         cond1_passed=cond1,

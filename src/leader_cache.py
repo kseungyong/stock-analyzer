@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS leaders (
     trailing_eps        REAL,
     forward_eps         REAL,
     eps_growth_yoy      REAL,
+    revenue_growth_yoy  REAL,
     trailing_pe         REAL,
     pe_quintile         INTEGER,
 
@@ -102,7 +103,7 @@ def upsert_quantitative(candidates: list[dict[str, Any]]) -> None:
         "symbol", "name", "market", "sector", "industry",
         "last_close", "market_cap", "market_cap_quintile",
         "near_high_pct", "return_1y_pct", "index_return_1y_pct", "rel_return_pp",
-        "trailing_eps", "forward_eps", "eps_growth_yoy", "trailing_pe", "pe_quintile",
+        "trailing_eps", "forward_eps", "eps_growth_yoy", "revenue_growth_yoy", "trailing_pe", "pe_quintile",
         "cond1_passed", "cond2_passed", "cond3_score", "passed",
     ]
     placeholders = ",".join("?" * (len(cols) + 3))  # +status,refreshed_at,created_at

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -70,15 +70,19 @@ def patched_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fake_model.generate_content.return_value = fake_resp
     monkeypatch.setattr(leader_llm, "_get_model", lambda: fake_model)
     monkeypatch.setattr(leader_llm, "_daily_count", lambda: 0)
-    monkeypatch.setattr(leader_llm, "_increment_daily_count", lambda: None)
 
-    return {"db": db, "universe": universe}
+    # Use MagicMock for _increment_daily_count so we can assert call count
+    mock_increment = MagicMock()
+    monkeypatch.setattr(leader_llm, "_increment_daily_count", mock_increment)
+
+    return {"db": db, "universe": universe, "mock_increment": mock_increment}
 
 
 def test_leaders_refresh_e2e(patched_runtime, monkeypatch: pytest.MonkeyPatch):
     """e2e: load universe → filter → LLM analyze → cache upsert."""
     import main
-    main.leaders_refresh()
+    rc = main.leaders_refresh()
+    assert rc == 0
 
     from src import leader_cache
     rows = leader_cache.list_active()
@@ -88,3 +92,37 @@ def test_leaders_refresh_e2e(patched_runtime, monkeypatch: pytest.MonkeyPatch):
     samsung = next(r for r in rows if r["symbol"] == "005930.KS")
     assert samsung["llm_tam_narrative"] == "T"
     assert samsung["llm_moat"] == "M"
+
+    # _increment_daily_count must be called once per successful LLM call
+    mock_increment = patched_runtime["mock_increment"]
+    assert mock_increment.call_count >= 1
+
+
+def test_leaders_refresh_e2e_llm_failure(patched_runtime, monkeypatch: pytest.MonkeyPatch):
+    """LLM analyze_one 이 success=False 를 반환할 때: cache에 error 필드 채워지고 cron 은 정상 종료."""
+    from src import leader_llm, leader_cache
+    from src.leader_llm import LLMResult
+
+    # 삼성전자는 LLM 실패, 다른 종목은 정상
+    original_analyze = leader_llm.analyze_one
+
+    def failing_analyze_one(inputs):
+        if inputs.get("symbol") == "005930.KS":
+            return LLMResult(fields={}, raw="error_raw", error="api_error")
+        return original_analyze(inputs)
+
+    monkeypatch.setattr(leader_llm, "analyze_one", failing_analyze_one)
+
+    import main
+    rc = main.leaders_refresh()
+    assert rc == 0  # cron must not crash
+
+    rows = leader_cache.list_active()
+    syms = {r["symbol"] for r in rows}
+    # 삼성전자는 filter 통과해야 (정량 결과는 있어야)
+    assert "005930.KS" in syms
+
+    samsung = next(r for r in rows if r["symbol"] == "005930.KS")
+    # LLM 실패 → llm_error 채워지고 tam_narrative 없어야
+    assert samsung["llm_error"] == "api_error"
+    assert samsung["llm_tam_narrative"] is None

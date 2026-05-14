@@ -45,6 +45,7 @@ def _sample_candidate(symbol: str = "005930.KS", passed: bool = True) -> dict[st
         "trailing_eps": 5000.0,
         "forward_eps": 6000.0,
         "eps_growth_yoy": 0.2,
+        "revenue_growth_yoy": 0.18,
         "trailing_pe": 14.0,
         "pe_quintile": 3,
         "cond1_passed": passed,

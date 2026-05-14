@@ -248,7 +248,7 @@ def daily_email_job() -> None:
     send_report(html, config["email"])
 
 
-def leaders_refresh() -> None:
+def leaders_refresh() -> int:
     """주도주 발굴 cron 진입점 (Spec §5 Cron 흐름).
 
     1. universe.yaml 파싱
@@ -257,6 +257,8 @@ def leaders_refresh() -> None:
     4. leader_llm.analyze_one(신규 + stale) 순차 호출
     5. leader_cache.upsert_all (user_* 보존)
     6. mark_dropped + recompute_stale
+
+    Returns 0 on success, 1 on critical failure (spec §7).
     """
     import os
     from src import leader_cache, leader_filter, leader_llm
@@ -266,8 +268,21 @@ def leaders_refresh() -> None:
         "AUTO_TRADER_UNIVERSE_PATH", "../auto-trader/config/universe.yaml"
     )
     logger.info("leaders-refresh 시작: universe=%s", path)
-    universe = leader_filter.load_universe(path)
-    candidates = leader_filter.run_filter(universe)
+
+    # Issue 4: universe load failure → log + exit 1
+    try:
+        universe = leader_filter.load_universe(path)
+    except Exception as exc:
+        logger.error("universe 로드 실패 — cron 중단: %s", exc)
+        return 1
+
+    # Issue 3: run_filter raises RuntimeError when skip_pct > 10% (spec §7)
+    try:
+        candidates = leader_filter.run_filter(universe)
+    except RuntimeError as exc:
+        logger.error("leader_filter.run_filter 실패 — cron exit 1: %s", exc)
+        return 1
+
     passed = [c for c in candidates if c.passed]
     rows = [c.as_row() for c in candidates]
     leader_cache.upsert_quantitative(rows)
@@ -279,6 +294,7 @@ def leaders_refresh() -> None:
 
     llm_calls = 0
     llm_errors = 0
+    llm_fail_count = 0
     for sym in to_llm:
         c = by_sym.get(sym)
         if c is None:
@@ -290,10 +306,17 @@ def leaders_refresh() -> None:
             "return_1y_pct": c.return_1y_pct or 0.0,
             "rel_return_pp": c.rel_return_pp or 0.0,
             "trailing_eps": c.trailing_eps, "forward_eps": c.forward_eps,
-            "revenue_growth_pct": c.eps_growth_yoy or 0.0,
+            # Issue 1: use revenue_growth_yoy (revenueGrowth) — not eps_growth_yoy
+            "revenue_growth_pct": c.revenue_growth_yoy or 0.0,
             "trailing_pe": c.trailing_pe,
         }
-        result = leader_llm.analyze_one(inputs)
+        # Issue 2: wrap analyze_one in try/except so loop never aborts
+        try:
+            result = leader_llm.analyze_one(inputs)
+        except Exception as exc:
+            logger.exception("analyze_one 예외 — %s skip: %s", sym, exc)
+            llm_fail_count += 1
+            continue
         llm_calls += 1
         if result.error:
             llm_errors += 1
@@ -309,9 +332,10 @@ def leaders_refresh() -> None:
     leader_cache.mark_dropped(diff["dropped"])
     leader_cache.recompute_stale()
     logger.info(
-        "leaders-refresh 완료: passed=%d llm_calls=%d errors=%d dropped=%d",
-        len(passed), llm_calls, llm_errors, len(diff["dropped"]),
+        "leaders-refresh 완료: passed=%d llm_calls=%d errors=%d llm_exceptions=%d dropped=%d",
+        len(passed), llm_calls, llm_errors, llm_fail_count, len(diff["dropped"]),
     )
+    return 0
 
 
 def run_scan(args):
@@ -383,8 +407,7 @@ def main():
         return
 
     if args.command == "leaders-refresh":
-        leaders_refresh()
-        return
+        sys.exit(leaders_refresh())
 
     if args.web:
         from src.web_app import run_web
