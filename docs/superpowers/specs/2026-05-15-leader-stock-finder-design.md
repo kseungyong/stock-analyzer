@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-KOSPI200 + KOSDAQ150 universe (350종 + KR ETF 6) 에서 **"주도주 5가지 조건"** 에 부합하는 후보를 발굴하고, 종목별로 각 조건의 부합 상세를 볼 수 있는 stock-analyzer 내 신규 페이지 (`/leaders` + `/leaders/<symbol>`) 를 구축한다.
+사용자 선별 universe (KOSPI200 + KOSDAQ150 중 50종 + KR ETF 6, `auto-trader/config/universe.yaml`) 에서 **"주도주 5가지 조건"** 에 부합하는 후보를 발굴하고, 종목별로 각 조건의 부합 상세를 볼 수 있는 stock-analyzer 내 신규 페이지 (`/leaders` + `/leaders/<symbol>`) 를 구축한다.
 
 ### 주도주 5조건 (사용자 정의)
 
@@ -22,6 +22,7 @@ KOSPI200 + KOSDAQ150 universe (350종 + KR ETF 6) 에서 **"주도주 5가지 �
 
 ### In scope
 - stock-analyzer 단독 신규 모듈. auto-trader 와 결합 없음 (auto-trader 의 `config/universe.yaml` 만 데이터 소스 참조)
+- universe 범위: `auto-trader/config/universe.yaml` 의 `kospi200:` + `kosdaq150:` 섹션만 합산 (~50종). **`etf:` 섹션은 제외** (개별 종목 주도주 발굴 목적, ETF 가격 추세는 별개 분석 대상)
 - 정량 hard filter (1·2번) → 통과 종목만 LLM 분석 (4·5번)
 - 3번 (밸류에이션) 은 filter 아닌 참고 표시 — 사용자 정의에 따라 PER 분위만 계산
 - Gemini 2.5 Flash 단일 모델로 정성 4필드 (TAM/내러티브/병목/해자) JSON 출력
@@ -35,6 +36,7 @@ KOSPI200 + KOSDAQ150 universe (350종 + KR ETF 6) 에서 **"주도주 5가지 �
 - 자동 매매 통합 — auto-trader 와 명시적 결합 없음
 - 백테스트 — 과거 leaders 페이지 시뮬레이션
 - 미국 종목 — 한국 시장 (KOSPI/KOSDAQ) 전용
+- ETF — universe.yaml 의 ETF 섹션은 파싱 단계에서 제외
 
 ## 3. Architecture
 
@@ -64,7 +66,7 @@ KOSPI200 + KOSDAQ150 universe (350종 + KR ETF 6) 에서 **"주도주 5가지 �
 ```
 
 ### 데이터 소스
-- universe: `../auto-trader/config/universe.yaml` (350종 + KR ETF 6) — 파싱 read-only
+- universe: `../auto-trader/config/universe.yaml` (~50종 (universe.yaml 의 kospi200+kosdaq150 섹션 합산) + KR ETF 6) — 파싱 read-only
 - 가격: yfinance `Ticker.history(period="1y")`
 - fundamentals: yfinance `Ticker.info` dict
 - 시장 지수: `^KS11` (KOSPI), `^KQ11` (KOSDAQ)
@@ -82,12 +84,12 @@ KOSPI200 + KOSDAQ150 universe (350종 + KR ETF 6) 에서 **"주도주 5가지 �
 | 조건 | 규칙 |
 |---|---|
 | 1번 가격 (a) 신고가 | `last_close / 52w_high ≥ 0.85` (신고가 대비 -15% 이내) |
-| 1번 가격 (b) 시장대비 | `return_1y_pct ≥ index_return_1y_pct + 20%p` (각 시장 지수 기준) |
-| 1번 가격 (c) 대형주 | `market_cap_quintile == 1` (시총 상위 20%) |
+| 1번 가격 (b) 시장대비 | `return_1y_pct ≥ index_return_1y_pct + 20%p`. 비교 지수: `kospi200:` 섹션 종목 → `^KS11`, `kosdaq150:` 섹션 종목 → `^KQ11` |
+| 1번 가격 (c) 대형주 | `market_cap_quintile == 1` (시총 상위 20%). **모집단: universe 전체 ~50종 단일 컷오프**. 시장별 분리 X — universe 가 이미 사용자 선별 대형주 풀이므로 상위 ~10종이 후보 |
 | 2번 이익 | `(trailing_eps > 0) OR (forward_eps > trailing_eps)` |
-| 3번 밸류 | filter 아님 — `pe_quintile` 만 계산 |
+| 3번 밸류 | filter 아님 — `pe_quintile` 만 계산 (universe 전체 분위) |
 
-데이터 fetch: 350종 × yfinance ~200ms = ~70초 (직렬). cron 윈도 충분.
+데이터 fetch: 50종 × yfinance ~200ms = ~10초 (직렬). cron 윈도 매우 여유.
 
 ### 4.2 `src/leader_llm.py` — 정성 분석
 
@@ -121,7 +123,7 @@ trailing PE: {trailing_pe}
 - max_output_tokens: 1024
 - timeout 30s, retry 1회 (exponential backoff 2s)
 
-**비용 예상**: 종목당 ~1000 in + 500 out tokens. 일일 통과종 평균 15종 가정 × 30일 = 450 호출/월 ≈ $0.15/월 (Gemini Flash 가격 기준).
+**비용 예상**: 종목당 ~1000 in + 500 out tokens. 일일 통과종 평균 5종 가정 (50종 중 hard filter 통과) × 30일 = 150 호출/월 ≈ $0.05/월 (Gemini Flash 가격 기준). 신규 진입 + stale 갱신만이므로 실제는 더 낮음.
 
 ### 4.3 `src/leader_cache.py` — SQLite 영속화
 
@@ -131,7 +133,7 @@ trailing PE: {trailing_pe}
 - `get(symbol) -> Row | None` — 상세 페이지용 (탈락 종목 포함)
 - `upsert_quantitative(candidates)` — cron 의 정량 갱신
 - `upsert_llm(symbol, result)` — LLM 결과 갱신, user_* 미변경
-- `update_user_fields(symbol, fields, user)` — 사용자 수정 저장
+- `update_user_fields(symbol, fields, user)` — 사용자 수정 저장. `user` 는 `_current_username()` 헬퍼 결과 (Session 인증 시 `session['username']`, Basic Auth 시 `request.authorization.username`, 둘 다 없으면 `'anonymous'`)
 - `mark_dropped(symbols)` — filter 통과 못한 기존 row → status='dropped'
 - `recompute_stale()` — llm_generated_at 기준 7일 경과 → is_stale=1
 
@@ -183,7 +185,7 @@ POST /leaders/<sym>/refresh → analyze_one() → llm_* 갱신 (user_* 미변경
 - **cron 시점 16:30** — KR analysis 16:00 cron 종료 (~16:08) 후 buffer 22분. yfinance 데이터는 KR 마감 15:30 이후 finalize.
 - **탈락 종목 row 유지** — 사용자 수정본 보존. 다시 진입 시 LLM 메모 재사용 (단 7일 stale 체크).
 - **user 수정본 + LLM 분리 저장** — 사용자가 LLM 메모와 자기 분석 비교 가능. 사용자 수정본은 LLM refresh 가 절대 덮어쓰지 않음.
-- **순차 LLM 호출** — 30종 × 2초 = 60초. 병렬화 없이도 cron 윈도 충분.
+- **순차 LLM 호출** — 신규/stale ~5종 × 2초 = ~10초. 병렬화 불필요.
 
 ## 6. Schema
 
@@ -298,7 +300,7 @@ tests/test_leaders_e2e.py       (cron 흐름 end-to-end)
 
 `.env` 신규 변수:
 - `GEMINI_API_KEY` — Gemini Flash 호출 키
-- `LEADER_LLM_DAILY_LIMIT=50` — 비용 폭증 차단 (기본 50)
+- `LEADER_LLM_DAILY_LIMIT=20` — 비용 폭증 차단 (universe 50종 기준, 일일 통과종 ~5종 가정에 4배 여유)
 - `AUTO_TRADER_UNIVERSE_PATH=../auto-trader/config/universe.yaml` — universe 파일 경로 (기본값)
 
 ## 10. Migration / Rollout
@@ -309,7 +311,7 @@ tests/test_leaders_e2e.py       (cron 흐름 end-to-end)
 4. 로컬 dev server 로 `/leaders` `/leaders/<symbol>` UI 확인
 5. 원격 macmini 로 commit/push/pull
 6. launchd plist 설치 + load
-7. 5/16 16:30 첫 정식 cron 결과 모니터링
+7. 다음 정식 거래일의 16:30 첫 cron 결과 모니터링 (5/15 금 → 5/18 월). 5/16~17 주말 cron 도 실행되지만 데이터는 5/15 종가 기준 동일
 
 ## 11. Open Questions
 
