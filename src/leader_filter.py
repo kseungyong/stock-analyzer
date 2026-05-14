@@ -184,8 +184,12 @@ def run_filter(universe: list[tuple[str, str]]) -> list[LeaderCandidate]:
 
     Returns 모든 종목 (passed True/False 모두). 호출자가 passed 로 필터링.
     """
-    kospi_r = compute_index_return("^KS11") or 0.0
-    kosdaq_r = compute_index_return("^KQ11") or 0.0
+    kospi_r = compute_index_return("^KS11")
+    kosdaq_r = compute_index_return("^KQ11")
+    if kospi_r is None or kosdaq_r is None:
+        raise RuntimeError(
+            f"시장 지수 fetch 실패 (KOSPI={kospi_r}, KOSDAQ={kosdaq_r}) — run 중단"
+        )
 
     tickers: list[Any] = []
     market_caps: list[float | None] = []
@@ -211,6 +215,7 @@ def run_filter(universe: list[tuple[str, str]]) -> list[LeaderCandidate]:
     )
 
     out: list[LeaderCandidate] = []
+    history_skipped = 0
     for i, (sym, market) in enumerate(universe):
         if tickers[i] is None:
             continue
@@ -221,14 +226,18 @@ def run_filter(universe: list[tuple[str, str]]) -> list[LeaderCandidate]:
             market_cap_quintile=mc_q.get(i),
             pe_quintile=pe_q.get(i),
         )
-        if c is not None:
-            out.append(c)
+        if c is None:
+            history_skipped += 1
+            continue
+        out.append(c)
 
-    skip_pct = len(skipped) / max(len(universe), 1)
+    total_skipped = len(skipped) + history_skipped
+    skip_pct = total_skipped / max(len(universe), 1)
     logger.info(
-        "leader_filter: universe=%d, evaluated=%d, passed=%d, skipped=%d (%.0f%%)",
-        len(universe), len(out), sum(1 for c in out if c.passed), len(skipped),
-        skip_pct * 100,
+        "leader_filter: universe=%d, evaluated=%d, passed=%d, "
+        "skipped=%d (info=%d + history=%d, %.0f%%)",
+        len(universe), len(out), sum(1 for c in out if c.passed),
+        total_skipped, len(skipped), history_skipped, skip_pct * 100,
     )
     if skip_pct > 0.10:
         raise RuntimeError(f"skip 률 {skip_pct:.0%} > 10% 임계 초과")

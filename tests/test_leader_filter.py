@@ -203,3 +203,44 @@ def test_run_filter_assigns_market_cap_quintile_globally(monkeypatch: pytest.Mon
     assert by_sym["D.KQ"].market_cap_quintile == 5 or by_sym["D.KQ"].market_cap_quintile == 4
     passed_syms = {c.symbol for c in cands if c.passed}
     assert passed_syms == {"A.KS"}
+
+
+def test_run_filter_raises_when_index_fetch_fails(monkeypatch: pytest.MonkeyPatch):
+    """지수 fetch 실패 시 cond1b 가 오염되므로 즉시 중단."""
+    monkeypatch.setattr(leader_filter, "compute_index_return", lambda s: None)
+    universe = [("005930.KS", "KOSPI")]
+
+    def mk(sym):
+        t = MagicMock()
+        t.info = {"marketCap": 1e14, "longName": "X"}
+        return t
+
+    monkeypatch.setattr(leader_filter.yf, "Ticker", mk)
+    with pytest.raises(RuntimeError, match="시장 지수 fetch 실패"):
+        leader_filter.run_filter(universe)
+
+
+def test_run_filter_counts_history_failures_in_skip_pct(monkeypatch: pytest.MonkeyPatch):
+    """history fetch 실패도 skip_pct 에 포함되어야 함."""
+    monkeypatch.setattr(leader_filter, "compute_index_return", lambda s: 0.10)
+
+    # 10종 중 2종은 history empty → _evaluate_single None → skip
+    universe = [(f"{i:06d}.KS", "KOSPI") for i in range(10)]
+
+    def mk(sym):
+        t = MagicMock()
+        t.info = {"marketCap": 1e14, "trailingEps": 100, "forwardEps": 110,
+                  "trailingPE": 14, "longName": "X"}
+        if sym in ("000000.KS", "000001.KS"):
+            t.history.return_value = pd.DataFrame()  # empty → None 반환
+        else:
+            t.history.return_value = pd.DataFrame(
+                {"Close": [100.0] * 252 + [200.0], "High": [200.0] * 253},
+                index=pd.date_range("2025-05-15", periods=253, freq="D"),
+            )
+        return t
+
+    monkeypatch.setattr(leader_filter.yf, "Ticker", mk)
+    # 2/10 = 20% > 10% → RuntimeError
+    with pytest.raises(RuntimeError, match="skip 률"):
+        leader_filter.run_filter(universe)
