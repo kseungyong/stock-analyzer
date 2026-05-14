@@ -123,3 +123,30 @@ def test_recompute_stale_marks_old_llm(db_path: Path):
     leader_cache.recompute_stale()
     row = leader_cache.get("005930.KS")
     assert row["is_stale"] == 1
+
+
+def test_display_field_returns_pending_when_both_null(db_path: Path):
+    """user_* AND llm_* 둘 다 NULL 이면 sentinel 반환."""
+    leader_cache.upsert_quantitative([_sample_candidate()])
+    row = leader_cache.get("005930.KS")
+    assert leader_cache.display_field(row, "tam_narrative") == "(분석 대기 중)"
+    assert leader_cache.display_field(row, "moat") == "(분석 대기 중)"
+
+
+def test_display_field_returns_user_empty_string_not_fallback(db_path: Path):
+    """사용자가 명시적으로 빈 문자열 저장 → 빈 문자열 반환 (LLM fallback 아님)."""
+    leader_cache.upsert_quantitative([_sample_candidate()])
+    leader_cache.upsert_llm("005930.KS", {
+        "tam_narrative": "LLM",
+        "narrative_expansion": "LLM",
+        "bottleneck": "LLM",
+        "moat": "LLM",
+    }, model="gemini-2.5-flash", raw="")
+    leader_cache.update_user_fields(
+        "005930.KS", {"tam_narrative": ""}, "sykim"
+    )
+    row = leader_cache.get("005930.KS")
+    # user_tam_narrative = "" → 사용자 의도 = '비움' → "" 반환
+    assert leader_cache.display_field(row, "tam_narrative") == ""
+    # moat 는 user_* 안 건드림 → llm fallback
+    assert leader_cache.display_field(row, "moat") == "LLM"

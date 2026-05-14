@@ -115,10 +115,10 @@ def upsert_quantitative(candidates: list[dict[str, Any]]) -> None:
         f"ON CONFLICT(symbol) DO UPDATE SET {set_clause}"
     )
     with _connect() as conn:
-        for c in candidates:
-            params = [c[k] for k in cols] + ["active", now, now]
-            conn.execute(sql, params)
-        conn.commit()
+        with conn:  # transaction: commits on exit, rolls back on exception
+            for c in candidates:
+                params = [c[k] for k in cols] + ["active", now, now]
+                conn.execute(sql, params)
 
 
 def list_active() -> list[sqlite3.Row]:
@@ -141,11 +141,11 @@ def mark_dropped(symbols: list[str]) -> None:
         return
     placeholders = ",".join("?" * len(symbols))
     with _connect() as conn:
-        conn.execute(
-            f"UPDATE leaders SET status='dropped' WHERE symbol IN ({placeholders})",
-            symbols,
-        )
-        conn.commit()
+        with conn:  # transaction
+            conn.execute(
+                f"UPDATE leaders SET status='dropped' WHERE symbol IN ({placeholders})",
+                symbols,
+            )
 
 
 def upsert_llm(
@@ -159,23 +159,23 @@ def upsert_llm(
     """LLM 4필드 + 메타 갱신. user_* 는 건드리지 않음."""
     now = int(time.time())
     with _connect() as conn:
-        conn.execute(
-            "UPDATE leaders SET "
-            "llm_tam_narrative=?, llm_narrative_expansion=?, "
-            "llm_bottleneck=?, llm_moat=?, "
-            "llm_raw_response=?, llm_generated_at=?, llm_model=?, llm_error=?, "
-            "is_stale=0 "
-            "WHERE symbol=?",
-            (
-                fields.get("tam_narrative"),
-                fields.get("narrative_expansion"),
-                fields.get("bottleneck"),
-                fields.get("moat"),
-                raw, now, model, error,
-                symbol,
-            ),
-        )
-        conn.commit()
+        with conn:  # transaction
+            conn.execute(
+                "UPDATE leaders SET "
+                "llm_tam_narrative=?, llm_narrative_expansion=?, "
+                "llm_bottleneck=?, llm_moat=?, "
+                "llm_raw_response=?, llm_generated_at=?, llm_model=?, llm_error=?, "
+                "is_stale=0 "
+                "WHERE symbol=?",
+                (
+                    fields.get("tam_narrative"),
+                    fields.get("narrative_expansion"),
+                    fields.get("bottleneck"),
+                    fields.get("moat"),
+                    raw, now, model, error,
+                    symbol,
+                ),
+            )
 
 
 def update_user_fields(symbol: str, fields: dict[str, str], user: str) -> None:
@@ -193,22 +193,22 @@ def update_user_fields(symbol: str, fields: dict[str, str], user: str) -> None:
     sets.extend(["user_edited_at=?", "user_edited_by=?"])
     params.extend([int(time.time()), user, symbol])
     with _connect() as conn:
-        conn.execute(
-            f"UPDATE leaders SET {','.join(sets)} WHERE symbol=?", params,
-        )
-        conn.commit()
+        with conn:  # transaction
+            conn.execute(
+                f"UPDATE leaders SET {','.join(sets)} WHERE symbol=?", params,
+            )
 
 
 def recompute_stale() -> None:
     """llm_generated_at 이 7일 초과면 is_stale=1."""
     threshold = int(time.time()) - _STALE_SECONDS
     with _connect() as conn:
-        conn.execute(
-            "UPDATE leaders SET is_stale=1 "
-            "WHERE llm_generated_at IS NOT NULL AND llm_generated_at < ?",
-            (threshold,),
-        )
-        conn.commit()
+        with conn:  # transaction
+            conn.execute(
+                "UPDATE leaders SET is_stale=1 "
+                "WHERE llm_generated_at IS NOT NULL AND llm_generated_at < ?",
+                (threshold,),
+            )
 
 
 def display_field(row: sqlite3.Row, name: str) -> str:
@@ -216,10 +216,10 @@ def display_field(row: sqlite3.Row, name: str) -> str:
     if name not in _LLM_FIELDS:
         raise ValueError(f"invalid field: {name}")
     user_val = row[f"user_{name}"]
-    if user_val:
+    if user_val is not None:
         return str(user_val)
     llm_val = row[f"llm_{name}"]
-    if llm_val:
+    if llm_val is not None:
         return str(llm_val)
     return "(분석 대기 중)"
 
