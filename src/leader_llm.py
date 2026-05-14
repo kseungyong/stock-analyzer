@@ -132,8 +132,14 @@ def analyze_one(inputs: dict[str, Any]) -> LLMResult:
             )
             last_raw = getattr(resp, "text", "") or ""
             _increment_daily_count()
+            parseable = last_raw.strip()
+            if parseable.startswith("```"):
+                # Markdown fence — strip first/last lines
+                lines = parseable.split("\n")
+                if len(lines) >= 2:
+                    parseable = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
             try:
-                fields = json.loads(last_raw)
+                fields = json.loads(parseable)
             except json.JSONDecodeError:
                 return LLMResult(fields={}, raw=last_raw, error="parse_failed")
             required = {"tam_narrative", "narrative_expansion", "bottleneck", "moat"}
@@ -149,4 +155,8 @@ def analyze_one(inputs: dict[str, Any]) -> LLMResult:
             )
             if attempt == 0:
                 time.sleep(_RETRY_BACKOFF_S)
-    return LLMResult(fields={}, raw=last_raw, error=last_err or "unknown")
+    return LLMResult(
+        fields={},
+        raw=last_raw or f"exception: {last_err}",
+        error="api_error",
+    )

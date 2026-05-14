@@ -81,3 +81,27 @@ def test_analyze_one_respects_daily_limit(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LEADER_LLM_DAILY_LIMIT", "20")
     result = leader_llm.analyze_one(_input())
     assert result.error == "over_limit"
+
+
+def test_analyze_one_returns_api_error_after_two_failures(fake_genai: MagicMock, monkeypatch: pytest.MonkeyPatch):
+    """양쪽 시도 모두 실패 → error='api_error', 호출 count = 2."""
+    fake_genai.model.generate_content.side_effect = Exception("429 quota exceeded")
+    monkeypatch.setattr(leader_llm.time, "sleep", lambda s: None)
+    result = leader_llm.analyze_one(_input())
+    assert result.error == "api_error"
+    assert fake_genai.model.generate_content.call_count == 2
+    # 원본 예외 정보는 raw 에 보존되어 디버그 가능
+    assert "429" in result.raw or "quota" in result.raw
+
+
+def test_analyze_one_strips_markdown_fence(fake_genai: MagicMock):
+    """Gemini 가 strict JSON 무시하고 ```json...``` 으로 감싸면 strip 후 파싱."""
+    payload = {"tam_narrative": "T", "narrative_expansion": "N",
+               "bottleneck": "B", "moat": "M"}
+    resp = MagicMock()
+    resp.text = f"```json\n{json.dumps(payload)}\n```"
+    fake_genai.model.generate_content.return_value = resp
+
+    result = leader_llm.analyze_one(_input())
+    assert result.error is None
+    assert result.fields == payload
