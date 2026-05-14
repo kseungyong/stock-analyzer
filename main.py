@@ -248,6 +248,72 @@ def daily_email_job() -> None:
     send_report(html, config["email"])
 
 
+def leaders_refresh() -> None:
+    """주도주 발굴 cron 진입점 (Spec §5 Cron 흐름).
+
+    1. universe.yaml 파싱
+    2. leader_filter.run_filter → 정량 평가
+    3. leader_cache.diff_with_existing → 신규/유지/stale/탈락
+    4. leader_llm.analyze_one(신규 + stale) 순차 호출
+    5. leader_cache.upsert_all (user_* 보존)
+    6. mark_dropped + recompute_stale
+    """
+    import os
+    from src import leader_cache, leader_filter, leader_llm
+
+    leader_cache.init_db()
+    path = os.environ.get(
+        "AUTO_TRADER_UNIVERSE_PATH", "../auto-trader/config/universe.yaml"
+    )
+    logger.info("leaders-refresh 시작: universe=%s", path)
+    universe = leader_filter.load_universe(path)
+    candidates = leader_filter.run_filter(universe)
+    passed = [c for c in candidates if c.passed]
+    rows = [c.as_row() for c in candidates]
+    leader_cache.upsert_quantitative(rows)
+
+    passed_syms = [c.symbol for c in passed]
+    diff = leader_cache.diff_with_existing(passed_syms)
+    to_llm = diff["new"] + diff["stale"]
+    by_sym = {c.symbol: c for c in passed}
+
+    llm_calls = 0
+    llm_errors = 0
+    for sym in to_llm:
+        c = by_sym.get(sym)
+        if c is None:
+            continue
+        inputs = {
+            "symbol": c.symbol, "name": c.name, "market": c.market,
+            "sector": c.sector, "industry": c.industry,
+            "market_cap": c.market_cap or 0,
+            "return_1y_pct": c.return_1y_pct or 0.0,
+            "rel_return_pp": c.rel_return_pp or 0.0,
+            "trailing_eps": c.trailing_eps, "forward_eps": c.forward_eps,
+            "revenue_growth_pct": c.eps_growth_yoy or 0.0,
+            "trailing_pe": c.trailing_pe,
+        }
+        result = leader_llm.analyze_one(inputs)
+        llm_calls += 1
+        if result.error:
+            llm_errors += 1
+            leader_cache.upsert_llm(
+                sym, {}, model="gemini-2.5-flash",
+                raw=result.raw, error=result.error,
+            )
+        else:
+            leader_cache.upsert_llm(
+                sym, result.fields, model="gemini-2.5-flash", raw=result.raw,
+            )
+
+    leader_cache.mark_dropped(diff["dropped"])
+    leader_cache.recompute_stale()
+    logger.info(
+        "leaders-refresh 완료: passed=%d llm_calls=%d errors=%d dropped=%d",
+        len(passed), llm_calls, llm_errors, len(diff["dropped"]),
+    )
+
+
 def run_scan(args):
     """수급/모멘텀 스캐너 실행."""
     from src.supply_scanner import scan_supply, scan_momentum, format_scan_result
@@ -288,6 +354,7 @@ def main():
     auto_parser.add_argument("market", choices=["korea", "us"])
     subparsers.add_parser("backfill", help="예측 히스토리 backfill (launchd cron 용)")
     subparsers.add_parser("daily-email", help="다이제스트 이메일 발송 (launchd cron 용)")
+    subparsers.add_parser("leaders-refresh", help="주도주 발굴 cron (launchd)")
 
     # 기존 옵션
     parser.add_argument("--run-now", action="store_true", help="즉시 분석 실행")
@@ -313,6 +380,10 @@ def main():
 
     if args.command == "daily-email":
         daily_email_job()
+        return
+
+    if args.command == "leaders-refresh":
+        leaders_refresh()
         return
 
     if args.web:
