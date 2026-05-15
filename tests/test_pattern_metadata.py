@@ -102,21 +102,46 @@ def test_description_html_xss_guard_blocks_event_attribute():
 
 
 def test_lookup_tier2_synthesizes_from_generic_template():
-    """tier:2 entry 는 generic template 합성."""
+    """tier:2 entry → lookup() 가 generic template + entry metadata 합성."""
     pm.reset_cache()
-    # _GENERIC_TEMPLATES 검증: 6 종류 있어야 함
+    # Tier 1 6 templates 존재 확인
     assert set(pm._GENERIC_TEMPLATES.keys()) == {
         "bullish_reversal", "bearish_reversal",
         "bullish_continuation", "bearish_continuation",
         "neutral", "doji_variant",
     }
+    # 실제 합성 — 타구리 는 bullish_reversal generic template + 매수 signal
+    e = pm.lookup("타구리")
+    assert e is not None
+    assert "<svg" in e["svg"]  # template svg 들어 있음
+    assert "타구리" in e["description_html"]  # entry name 합성됨
+    assert e["signal_typical"] == "매수"
+    assert e.get("tier") == 2
+    # 도지 변종 — doji_variant template + 관망 signal
+    e2 = pm.lookup("긴다리 도지")
+    assert e2 is not None
+    assert e2["signal_typical"] == "관망"
+    assert e2.get("tier") == 2
 
 
 def test_lookup_unknown_generic_template_returns_none():
     """잘못된 generic_template 키면 None + warning."""
+    pm.reset_cache()
     # 직접 _cache 조작 (테스트 격리)
     pm._cache = {
         "x": {"tier": 2, "generic_template": "nonexistent", "signal_typical": "관망"}
     }
-    assert pm.lookup("x") is None
+    try:
+        assert pm.lookup("x") is None
+    finally:
+        pm.reset_cache()
+
+
+def test_lookup_tier2_missing_generic_template_key_returns_none():
+    """tier:2 인데 generic_template 키 자체가 없으면 None."""
     pm.reset_cache()
+    pm._cache = {"x": {"tier": 2, "signal_typical": "관망"}}
+    try:
+        assert pm.lookup("x") is None
+    finally:
+        pm.reset_cache()

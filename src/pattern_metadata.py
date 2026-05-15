@@ -146,9 +146,12 @@ def lookup(pattern_name: str) -> dict[str, Any] | None:
     # Tier 2: generic_template 키만 있고 svg/description 없음 → 템플릿 합성
     if entry.get("tier") == 2:
         template_key = entry.get("generic_template")
+        if not template_key:
+            logger.warning("pattern %s: tier:2 entry missing 'generic_template' key", pattern_name)
+            return None
         template = _GENERIC_TEMPLATES.get(template_key)
         if template is None:
-            logger.warning("pattern %s: generic_template %s not found", pattern_name, template_key)
+            logger.warning("pattern %s: generic_template '%s' not in _GENERIC_TEMPLATES", pattern_name, template_key)
             return None
         return {
             "svg": template["svg"],
