@@ -12,14 +12,14 @@ from pathlib import Path
 from urllib.parse import quote
 
 import yaml
-from flask import Flask, abort, request, redirect, session, url_for, jsonify, Response, render_template
+from flask import Flask, abort, flash, request, redirect, session, url_for, jsonify, Response, render_template
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-from markupsafe import escape
+from markupsafe import escape, Markup
 
 from src.validators import validate_stock_symbol, validate_stock_name, sanitize_stock_symbol, is_valid_search_query
 from src.stock_search import search_stocks
@@ -135,6 +135,8 @@ _backtest_lock = threading.Lock()  # 글로벌 백테스트 동시 실행 1개�
 
 _config_lock = threading.RLock()  # settings.yaml read-modify-write 보호 (재진입 허용)
 
+_leaders_refresh_lock = threading.Lock()  # 주도주 LLM 재분석 동시 실행 방지 (spec §C.1)
+
 
 # ---------------------------------------------------------------------------
 # CSRF helpers
@@ -147,9 +149,12 @@ def _csrf_token() -> str:
     return session["csrf_token"]
 
 
-def _csrf_input() -> str:
-    """POST 폼에 삽입할 숨김 CSRF 입력 필드 HTML을 반환한다."""
-    return f'<input type="hidden" name="csrf_token" value="{_csrf_token()}">'
+def _csrf_input() -> Markup:
+    """POST 폼에 삽입할 숨김 CSRF 입력 필드 HTML을 반환한다.
+
+    Markup 으로 래핑 — Jinja2 autoescape 가 HTML 을 text 로 변환하는 버그 방지.
+    """
+    return Markup(f'<input type="hidden" name="csrf_token" value="{_csrf_token()}">')
 
 
 def _csrf_validate() -> None:
@@ -2395,67 +2400,86 @@ def leaders_detail(symbol: str):
     )
 
 
-@app.route("/leaders/<path:symbol>/notes", methods=["POST"])
-def leaders_notes(symbol: str):
-    """POST /leaders/<symbol>/notes — user_notes 컬럼 저장. Auth required."""
+@app.route("/leaders/<path:symbol>/edit", methods=["POST"])
+def leaders_edit(symbol: str):
+    """POST /leaders/<symbol>/edit — 4 user_* 필드 부분 업데이트 (spec §4.4).
+
+    form fields: user_tam_narrative, user_narrative_expansion, user_bottleneck, user_moat.
+    빈 문자열 필드는 건너뜀 (제출하지 않은 것으로 간주).
+    Auth required; CSRF validated.
+    """
     _csrf_validate()
     from src import leader_cache as lc
     row = lc.get(symbol)
     if row is None:
-        app.logger.warning("leaders_notes: symbol=%s not found → 404", symbol)
+        app.logger.warning("leaders_edit: symbol=%s not found → 404", symbol)
         abort(404)
-    notes = request.form.get("user_notes", "")
     user = _current_username()
-    lc.update_user_notes(symbol, notes, user)
-    app.logger.info("leaders_notes: symbol=%s user=%s saved", symbol, user)
+    allowed_fields = ("tam_narrative", "narrative_expansion", "bottleneck", "moat")
+    fields: dict[str, str] = {}
+    for field in allowed_fields:
+        val = request.form.get(f"user_{field}", "")
+        if val:  # 빈 문자열 skip — 부분 업데이트
+            fields[field] = val
+    if fields:
+        lc.update_user_fields(symbol, fields, user)
+    app.logger.info("leaders_edit: symbol=%s user=%s fields=%s saved", symbol, user, list(fields.keys()))
     return redirect(url_for("leaders_detail", symbol=symbol), code=303)
 
 
-@app.route("/leaders/<path:symbol>/refresh-llm", methods=["POST"])
-def leaders_refresh_llm(symbol: str):
-    """POST /leaders/<symbol>/refresh-llm — 단일 LLM 재분석 트리거.
+@app.route("/leaders/<path:symbol>/refresh", methods=["POST"])
+def leaders_refresh(symbol: str):
+    """POST /leaders/<symbol>/refresh — 단일 LLM 재분석 트리거 (spec §4.4).
 
-    daily limit 초과 시 429 반환. LLM 결과는 llm_* 컬럼만 갱신 (user_* 보존).
+    daily limit 초과 시 flash + redirect. LLM 결과는 llm_* 컬럼만 갱신 (user_* 보존).
+    동시 실행 방지: _leaders_refresh_lock 사용.
     """
     _csrf_validate()
     from src import leader_cache as lc
     from src import leader_llm
     row = lc.get(symbol)
     if row is None:
-        app.logger.warning("leaders_refresh_llm: symbol=%s not found → 404", symbol)
+        app.logger.warning("leaders_refresh: symbol=%s not found → 404", symbol)
         abort(404)
-    inputs = {
-        "symbol": row["symbol"],
-        "name": row["name"],
-        "market": row["market"],
-        "sector": row["sector"],
-        "industry": row["industry"],
-        "market_cap": row["market_cap"] or 0,
-        "return_1y_pct": row["return_1y_pct"] or 0.0,
-        "rel_return_pp": row["rel_return_pp"] or 0.0,
-        "trailing_eps": row["trailing_eps"],
-        "forward_eps": row["forward_eps"],
-        "revenue_growth_pct": row["eps_growth_yoy"] or 0.0,
-        "trailing_pe": row["trailing_pe"],
-    }
-    result = leader_llm.analyze_one(inputs)
-    if result.error == "over_limit":
-        app.logger.warning(
-            "leaders_refresh_llm: daily limit exceeded for symbol=%s", symbol
+    if not _leaders_refresh_lock.acquire(blocking=False):
+        flash("다른 LLM 재분석이 진행 중입니다. 잠시 후 다시 시도하세요.", "warning")
+        return redirect(url_for("leaders_detail", symbol=symbol), code=303)
+    try:
+        inputs = {
+            "symbol": row["symbol"],
+            "name": row["name"],
+            "market": row["market"],
+            "sector": row["sector"],
+            "industry": row["industry"],
+            "market_cap": row["market_cap"] or 0,
+            "return_1y_pct": row["return_1y_pct"] or 0.0,
+            "rel_return_pp": row["rel_return_pp"] or 0.0,
+            "trailing_eps": row["trailing_eps"],
+            "forward_eps": row["forward_eps"],
+            "revenue_growth_pct": row["revenue_growth_yoy"] or 0.0,
+            "trailing_pe": row["trailing_pe"],
+        }
+        result = leader_llm.analyze_one(inputs)
+        if result.error == "over_limit":
+            app.logger.warning(
+                "leaders_refresh: daily limit exceeded for symbol=%s", symbol
+            )
+            flash("일일 LLM 호출 한도를 초과했습니다. 내일 다시 시도하세요.", "error")
+            return redirect(url_for("leaders_detail", symbol=symbol), code=303)
+        if result.error:
+            lc.upsert_llm(
+                symbol, {}, model="gemini-2.5-flash",
+                raw=result.raw, error=result.error,
+            )
+        else:
+            lc.upsert_llm(
+                symbol, result.fields, model="gemini-2.5-flash", raw=result.raw,
+            )
+        app.logger.info(
+            "leaders_refresh: symbol=%s error=%s", symbol, result.error
         )
-        return jsonify({"error": "daily_limit_exceeded"}), 429
-    if result.error:
-        lc.upsert_llm(
-            symbol, {}, model="gemini-2.5-flash",
-            raw=result.raw, error=result.error,
-        )
-    else:
-        lc.upsert_llm(
-            symbol, result.fields, model="gemini-2.5-flash", raw=result.raw,
-        )
-    app.logger.info(
-        "leaders_refresh_llm: symbol=%s error=%s", symbol, result.error
-    )
+    finally:
+        _leaders_refresh_lock.release()
     return redirect(url_for("leaders_detail", symbol=symbol), code=303)
 
 

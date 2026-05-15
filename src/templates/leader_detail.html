@@ -174,10 +174,39 @@ body {
 }
 .llm-text.pending { color: var(--slate-500); font-style: italic; }
 
-/* 사용자 메모 폼 */
-.notes-form textarea {
+/* 사용자 편집 폼 */
+.edit-form .field-group {
+  margin-bottom: 18px;
+}
+.edit-form label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--slate-700);
+  margin-bottom: 4px;
+}
+.edit-form .llm-ref {
+  background: var(--slate-100);
+  border: 1px solid var(--slate-200);
+  border-radius: 5px;
+  padding: 7px 10px;
+  font-size: 0.8rem;
+  color: var(--slate-500);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  margin-bottom: 6px;
+}
+.edit-form .llm-ref-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--slate-400);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+.edit-form textarea {
   width: 100%;
-  min-height: 80px;
+  min-height: 72px;
   padding: 10px 12px;
   border: 1.5px solid var(--slate-300);
   border-radius: 7px;
@@ -186,7 +215,7 @@ body {
   resize: vertical;
   color: var(--slate-900);
 }
-.notes-form textarea:focus {
+.edit-form textarea:focus {
   outline: none;
   border-color: var(--blue-500);
   box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
@@ -343,14 +372,39 @@ body {
     </div>
   </div>
 
-  <!-- 사용자 메모 폼 -->
+  <!-- 사용자 수정 폼 (spec §4.4 /edit) -->
   <div class="card">
-    <div class="card-title">사용자 메모</div>
-    <form class="notes-form" method="post" action="/leaders/{{ row['symbol'] }}/notes">
+    <div class="card-title">사용자 수정 — 4개 정성 필드</div>
+    <p style="font-size:0.82rem;color:var(--slate-500);margin-bottom:14px;">
+      LLM 초안을 참고하여 각 필드를 수정하세요. 입력한 필드만 저장됩니다 (빈 칸은 건너뜀).
+    </p>
+    <form class="edit-form" method="post" action="/leaders/{{ row['symbol'] }}/edit">
       {{ csrf_input() }}
-      <textarea name="user_notes" placeholder="자유 메모 — 투자 근거, 관찰 사항 등">{{ row['user_notes'] or '' }}</textarea>
+
+      {% macro edit_field(field_name, label) %}
+      {% set llm_val = row['llm_' + field_name] %}
+      {% set user_val = row['user_' + field_name] %}
+      <div class="field-group">
+        <label for="user-{{ field_name }}">{{ label }}</label>
+        {% if llm_val %}
+        <div class="llm-ref-label">LLM 초안 (참고)</div>
+        <div class="llm-ref">{{ llm_val }}</div>
+        {% endif %}
+        <textarea
+          id="user-{{ field_name }}"
+          name="user_{{ field_name }}"
+          placeholder="{{ llm_val or '(LLM 분석 대기 중)' }}"
+        >{{ user_val or '' }}</textarea>
+      </div>
+      {% endmacro %}
+
+      {{ edit_field('tam_narrative', 'TAM / 글로벌 트렌드 (④-a)') }}
+      {{ edit_field('narrative_expansion', '내러티브 확장성 (④-b)') }}
+      {{ edit_field('bottleneck', '밸류체인 병목 (⑤-a)') }}
+      {{ edit_field('moat', '경쟁 해자 (⑤-b)') }}
+
       <div style="margin-top:8px;">
-        <button type="submit" class="btn btn-primary">메모 저장</button>
+        <button type="submit" class="btn btn-primary">수정 저장</button>
       </div>
     </form>
   </div>
@@ -359,10 +413,10 @@ body {
   <div class="card">
     <div class="card-title">LLM 재분석</div>
     <p style="font-size:0.875rem;color:var(--slate-500);margin-bottom:12px;">
-      Gemini 2.5 Flash 로 4·5번 정성 분석을 다시 호출합니다. 사용자 메모(user_notes)와 user_* 수정본은 보존됩니다.
-      일일 호출 한도(LEADER_LLM_DAILY_LIMIT) 초과 시 429 응답이 반환됩니다.
+      Gemini 2.5 Flash 로 4·5번 정성 분석을 다시 호출합니다. user_* 수정본은 보존됩니다.
+      일일 호출 한도(LEADER_LLM_DAILY_LIMIT) 초과 시 오류 메시지를 표시합니다.
     </p>
-    <form method="post" action="/leaders/{{ row['symbol'] }}/refresh-llm">
+    <form method="post" action="/leaders/{{ row['symbol'] }}/refresh">
       {{ csrf_input() }}
       <button type="submit" class="btn btn-amber">LLM 재분석</button>
     </form>
