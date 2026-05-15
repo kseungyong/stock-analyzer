@@ -14,7 +14,7 @@
       <text x="160" y="20" font-size="8" fill="#16A34A">돌파</text>
     </svg>
   description_html: |
-    <p><strong>형성:</strong> 두 저점이 비슷한 가격에서 형성되고 사이에 고점(넥라인). 알파벳 W 모양.</p>
+    <p><strong>형성:</strong> 두 저점이 비슷한 가격에서 형성되고 사이에 고점을 연결한 저항선(넥라인). 알파벳 W 모양.</p>
     <p><strong>신호:</strong> 넥라인 돌파 시 강한 매수 신호. 하락 추세 종료 + 상승 전환.</p>
     <p><strong>검출:</strong> 저점1·2 가격이 ±3% 이내, 사이에 명확한 고점, (옵션) 넥라인 돌파.</p>
 
@@ -22,16 +22,16 @@
   signal_typical: 매도
   svg: |
     <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
-      <polyline points="10,70 30,50 50,30 70,20 90,25 110,20 130,30 150,50 170,70 190,85"
+      <polyline points="10,70 30,50 50,30 70,20 90,55 110,20 130,30 150,50 170,70 190,85"
                 fill="none" stroke="#DC2626" stroke-width="2"/>
-      <line x1="50" y1="45" x2="170" y2="45" stroke="#999" stroke-dasharray="3,3" stroke-width="1"/>
+      <line x1="50" y1="55" x2="170" y2="55" stroke="#999" stroke-dasharray="3,3" stroke-width="1"/>
       <text x="50" y="15" font-size="8" fill="#DC2626">고점1</text>
       <text x="115" y="15" font-size="8" fill="#DC2626">고점2</text>
-      <text x="100" y="42" font-size="7" fill="#666">넥라인</text>
+      <text x="100" y="52" font-size="7" fill="#666">넥라인</text>
       <text x="160" y="85" font-size="8" fill="#DC2626">이탈</text>
     </svg>
   description_html: |
-    <p><strong>형성:</strong> 두 고점이 비슷한 가격에서 형성되고 사이에 저점(넥라인). 알파벳 M 모양.</p>
+    <p><strong>형성:</strong> 두 고점이 비슷한 가격에서 형성되고 사이에 저점을 연결한 지지선(넥라인). 알파벳 M 모양.</p>
     <p><strong>신호:</strong> 넥라인 이탈 시 강한 매도 신호. 상승 추세 종료 + 하락 전환.</p>
     <p><strong>검출:</strong> 고점1·2 가격이 ±3% 이내, 사이에 명확한 저점, (옵션) 넥라인 이탈.</p>
 
@@ -41,32 +41,32 @@
     <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
       <polyline points="10,80 30,55 50,45 70,55 90,75 110,30 130,55 150,45 170,55 190,80"
                 fill="none" stroke="#DC2626" stroke-width="2"/>
-      <line x1="30" y1="75" x2="170" y2="75" stroke="#999" stroke-dasharray="3,3" stroke-width="1"/>
+      <line x1="30" y1="55" x2="170" y2="55" stroke="#999" stroke-dasharray="3,3" stroke-width="1"/>
       <text x="20" y="50" font-size="7" fill="#DC2626">좌어깨</text>
       <text x="95" y="25" font-size="7" fill="#DC2626">헤드</text>
       <text x="155" y="50" font-size="7" fill="#DC2626">우어깨</text>
-      <text x="120" y="72" font-size="7" fill="#666">넥라인</text>
+      <text x="120" y="63" font-size="7" fill="#666">넥라인</text>
     </svg>
   description_html: |
     <p><strong>형성:</strong> 3개 고점 — 가운데 고점(헤드)이 가장 높고, 양쪽 고점(어깨)이 비슷한 높이. 상승 추세 정점.</p>
-    <p><strong>신호:</strong> 매도. 두 어깨를 잇는 넥라인 이탈 시 추세 전환 확정.</p>
+    <p><strong>신호:</strong> 매도. 어깨 사이 두 저점을 연결한 넥라인 이탈 시 추세 전환 확정.</p>
     <p><strong>검출:</strong> 3개 고점에서 좌·우 어깨 가격 ±5% 이내, 헤드가 둘 다보다 높음.</p>
 
 "역헤드앤숄더":
   signal_typical: 매수
   svg: |
     <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
-      <polyline points="10,20 30,45 50,55 70,45 90,25 110,70 130,45 150,55 170,45 190,20"
+      <polyline points="10,20 30,40 50,55 70,40 90,30 110,75 130,30 150,55 170,40 190,20"
                 fill="none" stroke="#16A34A" stroke-width="2"/>
-      <line x1="30" y1="25" x2="170" y2="25" stroke="#999" stroke-dasharray="3,3" stroke-width="1"/>
+      <line x1="80" y1="30" x2="140" y2="30" stroke="#999" stroke-dasharray="3,3" stroke-width="1"/>
       <text x="20" y="40" font-size="7" fill="#16A34A">좌어깨</text>
       <text x="95" y="80" font-size="7" fill="#16A34A">헤드</text>
       <text x="155" y="40" font-size="7" fill="#16A34A">우어깨</text>
-      <text x="120" y="22" font-size="7" fill="#666">넥라인</text>
+      <text x="120" y="27" font-size="7" fill="#666">넥라인</text>
     </svg>
   description_html: |
     <p><strong>형성:</strong> 3개 저점 — 가운데 저점(헤드)이 가장 낮고, 양쪽 저점(어깨)이 비슷한 깊이. 하락 추세 바닥.</p>
-    <p><strong>신호:</strong> 매수. 두 어깨를 잇는 넥라인 돌파 시 추세 전환 확정.</p>
+    <p><strong>신호:</strong> 매수. 어깨 사이 두 고점을 연결한 넥라인 돌파 시 추세 전환 확정.</p>
     <p><strong>검출:</strong> 3개 저점에서 좌·우 어깨 가격 ±5% 이내, 헤드가 둘 다보다 낮음.</p>
 
 "삼각형":
