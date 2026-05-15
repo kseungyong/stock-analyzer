@@ -9,6 +9,6 @@ __pycache__/
 .claude/
 logs/
 data/
-!src/data/
+!src/data/*.yaml
 .worktrees/
 .superpowers/

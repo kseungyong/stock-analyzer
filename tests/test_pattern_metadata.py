@@ -66,3 +66,36 @@ def test_svg_xss_guard_with_whitespace():
 """
     with pytest.raises(ValueError):
         pm._parse_and_validate(malicious_yaml)
+
+
+def test_svg_xss_guard_blocks_event_attribute():
+    malicious_yaml = """
+"악성패턴":
+  svg: '<svg onload="alert(1)"></svg>'
+  description_html: '<p>x</p>'
+  signal_typical: '관망'
+"""
+    with pytest.raises(ValueError, match="event handler"):
+        pm._parse_and_validate(malicious_yaml)
+
+
+def test_svg_xss_guard_blocks_foreignobject():
+    malicious_yaml = """
+"악성패턴":
+  svg: '<svg><foreignObject><div>x</div></foreignObject></svg>'
+  description_html: '<p>x</p>'
+  signal_typical: '관망'
+"""
+    with pytest.raises(ValueError, match="foreignObject"):
+        pm._parse_and_validate(malicious_yaml)
+
+
+def test_description_html_xss_guard_blocks_event_attribute():
+    malicious_yaml = """
+"악성패턴":
+  svg: '<svg></svg>'
+  description_html: '<p onclick="alert(1)">x</p>'
+  signal_typical: '관망'
+"""
+    with pytest.raises(ValueError, match="event handler"):
+        pm._parse_and_validate(malicious_yaml)
