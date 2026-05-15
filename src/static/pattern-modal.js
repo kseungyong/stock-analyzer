@@ -11,9 +11,9 @@
     backdrop = document.createElement('div');
     backdrop.className = 'pm-modal-backdrop';
     backdrop.innerHTML = `
-      <div class="pm-modal" role="dialog" aria-modal="true">
+      <div class="pm-modal" role="dialog" aria-modal="true" aria-labelledby="pm-modal-title">
         <div class="pm-modal-header">
-          <h2 class="pm-modal-title">패턴</h2>
+          <h2 class="pm-modal-title" id="pm-modal-title">패턴</h2>
           <button class="pm-modal-close" aria-label="닫기">×</button>
         </div>
         <div class="pm-tabs">
@@ -58,6 +58,9 @@
     panelActual.innerHTML = '<div class="pm-loading">탭 클릭 시 로드됩니다</div>';
     switchTab('textbook');
     backdrop.classList.add('pm-open');
+    // move focus to close button for keyboard accessibility
+    const closeBtn = backdrop.querySelector('.pm-modal-close');
+    if (closeBtn) closeBtn.focus();
     loadTextbook(pattern);
   }
 
@@ -90,12 +93,14 @@
         return r.json();
       })
       .then(function (j) {
+        if (currentPattern !== pattern) return;  // stale, ignore
         panelTextbook.innerHTML =
           '<div class="pm-textbook-svg">' + j.svg + '</div>' +
           '<div class="pm-textbook-desc">' + j.description_html + '</div>';
       })
       .catch(function (e) {
-        panelTextbook.innerHTML = '<div class="pm-error">' + e.message + '</div>';
+        if (currentPattern !== pattern) return;  // stale error, ignore
+        panelTextbook.innerHTML = '<div class="pm-error">' + escapeHTML(e.message) + '</div>';
       });
   }
 
@@ -110,6 +115,7 @@
         return r.json();
       })
       .then(function (j) {
+        if (currentPattern !== pattern || currentSymbol !== symbol || currentDate !== date) return;  // stale, ignore
         if (j.chart_b64) {
           panelActual.innerHTML =
             '<div class="pm-actual-img"><img src="data:image/png;base64,' + j.chart_b64 +
@@ -121,7 +127,8 @@
         }
       })
       .catch(function (e) {
-        panelActual.innerHTML = '<div class="pm-error">' + e.message + '</div>';
+        if (currentPattern !== pattern || currentSymbol !== symbol || currentDate !== date) return;  // stale error, ignore
+        panelActual.innerHTML = '<div class="pm-error">' + escapeHTML(e.message) + '</div>';
       });
   }
 

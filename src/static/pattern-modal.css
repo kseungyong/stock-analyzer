@@ -83,13 +83,12 @@
   text-align: center;
   padding: 2rem;
   color: #6b7280;
+  animation: pm-pulse 1.4s ease-in-out infinite;
 }
-.pm-loading::after {
-  content: "...";
-  display: inline-block;
-  animation: pm-dots 1s steps(4, end) infinite;
+@keyframes pm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
-@keyframes pm-dots { to { content: "...."; } }
 
 .pm-error {
   background: #fef2f2;
