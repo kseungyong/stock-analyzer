@@ -69,22 +69,56 @@
     <p><strong>신호:</strong> 매수. 어깨 사이 두 고점을 연결한 넥라인 돌파 시 추세 전환 확정.</p>
     <p><strong>검출:</strong> 3개 저점에서 좌·우 어깨 가격 ±5% 이내, 헤드가 둘 다보다 낮음.</p>
 
-"삼각형":
-  signal_typical: varies
+"상승 삼각형":
+  signal_typical: 매수
   svg: |
     <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
-      <!-- 수렴 삼각형 -->
+      <!-- 평평한 상단 저항선 + 상승하는 하단 지지선 -->
+      <line x1="20" y1="25" x2="180" y2="25" stroke="#DC2626" stroke-width="1.5"/>
+      <line x1="20" y1="85" x2="180" y2="35" stroke="#16A34A" stroke-width="1.5"/>
+      <polyline points="20,50 40,28 60,55 80,30 100,55 120,32 140,55 160,35 175,30"
+                fill="none" stroke="#1E40AF" stroke-width="1.5"/>
+      <text x="60" y="20" font-size="8" fill="#DC2626">평평한 저항선</text>
+      <text x="60" y="95" font-size="8" fill="#16A34A">상승 지지선</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 상단은 수평 저항선 (반복 매도), 하단은 상승 추세선 (저점 점점 높아짐). 매수세 강화.</p>
+    <p><strong>신호:</strong> 매수. 저항선 돌파 시 상승 추세 출발. 거래량 동반 시 신뢰도 ↑.</p>
+    <p><strong>검출:</strong> 최근 3+ 고점이 같은 가격대, 3+ 저점이 상승 추세선 위.</p>
+
+"하락 삼각형":
+  signal_typical: 매도
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <!-- 하강하는 상단 저항선 + 평평한 하단 지지선 -->
+      <line x1="20" y1="15" x2="180" y2="65" stroke="#DC2626" stroke-width="1.5"/>
+      <line x1="20" y1="75" x2="180" y2="75" stroke="#16A34A" stroke-width="1.5"/>
+      <polyline points="20,50 40,20 60,45 80,28 100,45 120,35 140,55 160,45 175,60"
+                fill="none" stroke="#1E40AF" stroke-width="1.5"/>
+      <text x="60" y="13" font-size="8" fill="#DC2626">하락 저항선</text>
+      <text x="60" y="95" font-size="8" fill="#16A34A">평평한 지지선</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 상단은 하락 추세선 (고점 점점 낮아짐), 하단은 수평 지지선 (반복 매수). 매도세 강화.</p>
+    <p><strong>신호:</strong> 매도. 지지선 이탈 시 하락 추세 출발.</p>
+    <p><strong>검출:</strong> 최근 3+ 고점이 하락 추세선, 3+ 저점이 같은 가격대.</p>
+
+"삼각형 수렴 (대칭)":
+  signal_typical: 관망
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <!-- 양쪽 모두 수렴 — 기존 "삼각형" 의 그림 그대로 -->
       <line x1="20" y1="20" x2="170" y2="50" stroke="#DC2626" stroke-width="1.5"/>
       <line x1="20" y1="80" x2="170" y2="50" stroke="#16A34A" stroke-width="1.5"/>
       <polyline points="20,55 40,30 60,65 80,35 100,55 120,40 140,55 160,48 175,52"
                 fill="none" stroke="#1E40AF" stroke-width="1.5"/>
-      <text x="180" y="50" font-size="7" fill="#666">꼭짓점</text>
+      <text x="170" y="50" font-size="7" fill="#666">꼭짓점</text>
       <text x="10" y="15" font-size="7" fill="#DC2626">고점 하락</text>
       <text x="10" y="92" font-size="7" fill="#16A34A">저점 상승</text>
     </svg>
   description_html: |
-    <p><strong>형성:</strong> 두 추세선 (상단 저항선 + 하단 지지선) 이 수렴. 변동성 축소 단계.</p>
-    <p><strong>신호:</strong> 방향 불명 (varies). 꼭짓점 부근에서 한 방향으로 돌파 → 그 방향으로 추세 출발. 거래량 동반 시 신뢰도 ↑.</p>
+    <p><strong>형성:</strong> 두 추세선 (상단 저항 + 하단 지지) 이 수렴. 변동성 축소, 방향 미정.</p>
+    <p><strong>신호:</strong> 관망. 꼭짓점 부근에서 한 방향 돌파 시 그 방향 추세 출발. 거래량 동반 시 신뢰도 ↑.</p>
     <p><strong>검출:</strong> 최근 3+ 고점이 하락 추세선, 3+ 저점이 상승 추세선 위. 두 선이 수렴.</p>
 
 "잉태형":

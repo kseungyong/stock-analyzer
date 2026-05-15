@@ -118,3 +118,13 @@ def test_textbook_only_get_method(client):
 def test_actual_only_get_method(client):
     resp = client.post("/api/pattern-popup/actual?symbol=005930.KS&pattern=더블바텀(W)")
     assert resp.status_code == 405
+
+
+def test_textbook_triangle_variants(client):
+    """3개 삼각형 변형 모두 매칭 (regression test for cross-task name mismatch)."""
+    for pattern in ['상승 삼각형', '하락 삼각형', '삼각형 수렴 (대칭)']:
+        resp = client.get('/api/pattern-popup/textbook?pattern=' + pattern)
+        assert resp.status_code == 200, f'{pattern} should return 200, got {resp.status_code}'
+        j = resp.get_json()
+        assert j['pattern'] == pattern
+        assert 'svg' in j and '<svg' in j['svg']

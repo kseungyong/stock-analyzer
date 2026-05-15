@@ -94,8 +94,11 @@
       })
       .then(function (j) {
         if (currentPattern !== pattern) return;  // stale, ignore
+        const sigColor = { '매수': '#16A34A', '매도': '#DC2626', '관망': '#D97706', 'varies': '#7C3AED' }[j.signal_typical] || '#64748B';
         panelTextbook.innerHTML =
           '<div class="pm-textbook-svg">' + j.svg + '</div>' +
+          '<div class="pm-signal-typical" style="display:inline-block; padding:0.25rem 0.75rem; background:' + sigColor + '; color:#fff; border-radius:4px; font-size:0.85rem; margin-bottom:0.75rem;">' +
+          '전형 신호: <strong>' + escapeHTML(j.signal_typical) + '</strong></div>' +
           '<div class="pm-textbook-desc">' + j.description_html + '</div>';
       })
       .catch(function (e) {
