@@ -3404,18 +3404,17 @@ def _fetch_pattern_json_for_symbol(symbol: str) -> dict | None:
     """analysis cache 에서 symbol 의 pattern_json 가져오기.
 
     Returns:
-        파싱된 dict or None (cache row 없음 또는 pattern_json 컬럼 비어있음).
+        파싱된 dict or None (cache row 없음 또는 pattern_json 컬럼 비어있음 또는 파싱 실패).
     """
     import json as _json
     import sqlite3
     from src.analysis_cache import _DB_PATH  # 기존 cache DB 경로
 
     try:
-        conn = sqlite3.connect(_DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT pattern_json FROM analysis_cache WHERE symbol = ?", (symbol,))
-        row = cur.fetchone()
-        conn.close()
+        with sqlite3.connect(_DB_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT pattern_json FROM analysis_cache WHERE symbol = ?", (symbol,))
+            row = cur.fetchone()
         if row is None or row[0] is None:
             return None
         return _json.loads(row[0])

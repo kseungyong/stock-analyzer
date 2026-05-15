@@ -77,6 +77,8 @@ def test_actual_with_mocked_data(client, monkeypatch):
     assert j["symbol"] == "005930.KS"
     assert j["chart_b64"] is not None
     assert "넥라인" in j["caption"] or "돌파" in j["caption"]
+    assert "signal_at_detection" in j  # response key present
+    assert j["signal_at_detection"] == "매수"  # double bottom with breakout=True
 
 
 def test_actual_returns_null_chart_when_no_detection(client, monkeypatch):
@@ -106,3 +108,13 @@ def test_actual_returns_404_when_no_cache_row(client, monkeypatch):
     )
     resp = client.get("/api/pattern-popup/actual?symbol=UNKNOWN.KS&pattern=더블바텀(W)")
     assert resp.status_code == 404
+
+
+def test_textbook_only_get_method(client):
+    resp = client.post("/api/pattern-popup/textbook?pattern=더블바텀(W)")
+    assert resp.status_code == 405
+
+
+def test_actual_only_get_method(client):
+    resp = client.post("/api/pattern-popup/actual?symbol=005930.KS&pattern=더블바텀(W)")
+    assert resp.status_code == 405
