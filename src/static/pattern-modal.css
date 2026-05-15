@@ -1,0 +1,109 @@
+/* Pattern modal — 배지 클릭 시 학습용 팝업 */
+
+.pm-modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: none;
+  z-index: 9999;
+  align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.pm-modal-backdrop.pm-open { display: flex; }
+
+.pm-modal {
+  background: #fff;
+  border-radius: 12px;
+  max-width: 720px; width: 100%;
+  max-height: 90vh; overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  display: flex; flex-direction: column;
+}
+
+.pm-modal-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.pm-modal-title { font-size: 1.1rem; font-weight: 600; margin: 0; }
+.pm-modal-close {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 1.5rem; line-height: 1; color: #6b7280;
+  padding: 0; margin-left: 1rem;
+}
+.pm-modal-close:hover { color: #111; }
+
+.pm-tabs {
+  display: flex;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+.pm-tab {
+  flex: 1; padding: 0.75rem 1rem;
+  background: transparent; border: none; cursor: pointer;
+  font-size: 0.95rem; color: #6b7280;
+  border-bottom: 2px solid transparent;
+}
+.pm-tab.pm-active { color: #1E40AF; border-bottom-color: #1E40AF; background: #fff; font-weight: 600; }
+
+.pm-tab-panel {
+  padding: 1.25rem;
+  display: none;
+}
+.pm-tab-panel.pm-active { display: block; }
+
+.pm-textbook-svg {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.pm-textbook-svg svg { width: 100%; height: auto; max-width: 100%; display: block; }
+
+.pm-textbook-desc p { margin: 0.5rem 0; line-height: 1.55; color: #1f2937; }
+.pm-textbook-desc strong { color: #111; }
+
+.pm-actual-img {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+}
+.pm-actual-img img { width: 100%; height: auto; max-width: 100%; display: block; }
+
+.pm-caption {
+  font-size: 0.9rem;
+  color: #4b5563;
+  background: #eff6ff;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  border-left: 3px solid #1E40AF;
+}
+
+.pm-loading {
+  text-align: center;
+  padding: 2rem;
+  color: #6b7280;
+}
+.pm-loading::after {
+  content: "...";
+  display: inline-block;
+  animation: pm-dots 1s steps(4, end) infinite;
+}
+@keyframes pm-dots { to { content: "...."; } }
+
+.pm-error {
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 1rem;
+  border-radius: 6px;
+  border-left: 3px solid #DC2626;
+}
+
+/* badge 안의 패턴 이름 링크 */
+a[data-pattern] {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+a[data-pattern]:hover { text-decoration: underline; }
