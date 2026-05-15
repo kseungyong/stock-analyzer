@@ -980,6 +980,8 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{title} — Stock Analyzer</title>
   <style>{_CSS}</style>
+  <link rel="stylesheet" href="/static/pattern-modal.css">
+  <script src="/static/pattern-modal.js" defer></script>
 </head>
 <body>
 <nav class="topbar">
@@ -1077,6 +1079,21 @@ def _render_signal_badge(
         score_part = " 0"
     label = f"{prefix}{value}" if prefix else value
     return f'<span class="signal-badge {cls}">{label}{score_part}</span>'
+
+
+def _pattern_link(pattern_name: str, symbol: str | None = None, date: str | None = None) -> str:
+    """패턴 이름 → 모달 트리거 anchor.
+
+    pattern_name: 한글 패턴명 (XSS escape 처리)
+    symbol: 선택 — analysis 컨텍스트 있을 때만
+    date: 선택 — 다중 검출 식별
+    """
+    attrs = f'data-pattern="{escape(pattern_name)}"'
+    if symbol:
+        attrs += f' data-symbol="{escape(symbol)}"'
+    if date:
+        attrs += f' data-date="{escape(date)}"'
+    return f'<a href="#" {attrs}>{escape(pattern_name)}</a>'
 
 
 # ── 모델 설명 (정적) ──────────────────────────────────────────────────────
@@ -1527,7 +1544,8 @@ def index():
                 tops = (pj.get("summary") or {}).get("top_patterns") or []
                 psig = cache_row["pattern_signal"]
                 color = {"매수": "#16A34A", "매도": "#DC2626", "사지마": "#D97706", "팔지마": "#D97706"}.get(psig, "#64748B")
-                tops_text = " · ".join(tops[:2]) if tops else ""
+                tops_links = [_pattern_link(p, symbol=s["symbol"]) for p in tops[:2]]
+                tops_text = " · ".join(tops_links) if tops_links else ""
                 if tops_text:
                     pattern_badge_html = (
                         f'<span class="badge" style="background:{color};color:#fff;">📈 {psig}: {tops_text}</span>'
@@ -1897,14 +1915,19 @@ def _render_pattern_section(row: dict) -> str:
 
     score = summary.get("score", 0)
     sign = "+" if score >= 0 else ""
-    tops = " · ".join(summary.get("top_patterns") or []) or "(패턴 없음)"
+    _symbol = row.get("cache_key") or ""
+    top_list = summary.get("top_patterns") or []
+    if top_list:
+        tops = " · ".join(_pattern_link(p, symbol=_symbol) for p in top_list)
+    else:
+        tops = "(패턴 없음)"
     parts = [f"""
     <div class="card" style="margin-top:1rem;">
       <h2 style="margin:0 0 1rem 0;">📊 패턴 분석</h2>
       <div style="background:{sig_color};color:#fff;padding:0.75rem 1rem;border-radius:8px;margin-bottom:1rem;">
         <strong style="font-size:1.1rem;">종합 시그널: {escape(summary.get("signal", "관망"))}</strong>
         &nbsp; <span style="opacity:0.85;">score {sign}{score}</span>
-        <br><small>주요 패턴: {escape(tops)}</small>
+        <br><small>주요 패턴: {tops}</small>
       </div>
     """]
 
@@ -1934,8 +1957,9 @@ def _render_pattern_section(row: dict) -> str:
         for c in candles[:8]:
             csig = c.get("signal", "관망")
             ccolor = {"매수": "#16A34A", "매도": "#DC2626"}.get(csig, "#64748B")
+            cname_link = _pattern_link(c.get("name", ""), symbol=_symbol, date=c.get("date"))
             rows.append(
-                f'<li><span style="color:{ccolor};font-weight:600;">{escape(c.get("name",""))}</span> '
+                f'<li><span style="color:{ccolor};font-weight:600;">{cname_link}</span> '
                 f'<small style="color:#64748B;">— {escape(csig)} ({escape(c.get("date",""))})</small></li>'
             )
         parts.append(f"""
@@ -1955,8 +1979,13 @@ def _render_pattern_section(row: dict) -> str:
             range_str = f" <small>[{from_d} ~ {to_d}, {dur}일]</small>" if from_d else ""
             # 패턴별 raw price 로 details 빌드 (통화 명시)
             details = _build_chart_pattern_details(cp, fp)
+            cpname_link = _pattern_link(
+                cp.get("name", ""),
+                symbol=_symbol,
+                date=cp.get("to_date") or cp.get("from_date"),
+            )
             rows.append(
-                f'<li><span style="color:{ccolor};font-weight:600;">{escape(cp.get("name",""))}</span>'
+                f'<li><span style="color:{ccolor};font-weight:600;">{cpname_link}</span>'
                 f' — {escape(csig)} (신뢰도 {cp.get("confidence",0)*100:.0f}%){range_str}'
                 f'<br><small style="color:#475569;">{details}</small></li>'
             )
@@ -2735,7 +2764,8 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
             psig = h["pattern_signal"]
             pcolor = {"매수": "#16A34A", "매도": "#DC2626",
                       "사지마": "#D97706", "팔지마": "#D97706"}.get(psig, "#64748B")
-            tops_text = " · ".join(tops[:2]) if tops else ""
+            tops_links = [_pattern_link(p, symbol=sym) for p in tops[:2]]
+            tops_text = " · ".join(tops_links) if tops_links else ""
             label = f"📈 {psig}: {tops_text}" if tops_text else f"📈 {psig}"
             pattern_badge_html = (
                 f'<span class="badge" style="background:{pcolor};color:#fff;">{label}</span>'
