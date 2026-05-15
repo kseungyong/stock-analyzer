@@ -9,5 +9,6 @@ __pycache__/
 .claude/
 logs/
 data/
+!src/data/
 .worktrees/
 .superpowers/
