@@ -129,3 +129,31 @@ def test_lru_cache_hit_on_second_call():
         pp.build_actual_chart("005930.KS", "잉태형", date="2026-05-13", pattern_json=pj)
         pp.build_actual_chart("005930.KS", "잉태형", date="2026-05-13", pattern_json=pj)
     assert mock.call_count == 1  # 두 번째는 cache hit
+
+
+def test_render_chart_with_tz_aware_index():
+    """yfinance 실제 데이터는 tz-aware DatetimeIndex 반환 — 그 케이스 검증."""
+    ohlc = pd.DataFrame({
+        "Open":  [100.0] * 60,
+        "High":  [110.0] * 60,
+        "Low":   [90.0]  * 60,
+        "Close": [105.0] * 60,
+        "Volume": [1000] * 60,
+    }, index=pd.date_range("2026-03-15", periods=60, tz="UTC"))
+    detection = {
+        "name": "더블바텀(W)",
+        "low1": {"date": "2026-04-15", "price": 95},
+        "low2": {"date": "2026-05-08", "price": 96},
+        "neckline": 105,
+        "current": 110,
+        "breakout": True,
+        "from_date": "2026-04-15",
+        "to_date": "2026-05-08",
+    }
+    with patch.object(pp, "_fetch_ohlc", return_value=ohlc):
+        result = pp.build_actual_chart("005930.KS", "더블바텀(W)", date=None, pattern_json={
+            "chart_patterns": [detection],
+            "candles": [],
+        })
+    # tz mismatch shouldn't raise; chart still renders
+    assert result["chart_b64"] is not None, "tz-aware OHLC index must not crash chart rendering"

@@ -10,10 +10,16 @@ from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
 import yfinance as yf
+from matplotlib.figure import Figure
+
+from src.report_generator import _detect_korean_font as _detect_korean_font_rg
+
+# 모듈 초기화 시 한글 폰트 설정 — import 순서에 무관하게 항상 실행
+matplotlib.rcParams["font.family"] = _detect_korean_font_rg()
+matplotlib.rcParams["axes.unicode_minus"] = False
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +128,24 @@ def _build_caption(detection: dict) -> str:
     return f"{date_str} — {name} ({signal})"
 
 
+def _to_compatible_ts(date_str: str, ref_index: pd.DatetimeIndex) -> pd.Timestamp:
+    """Parse date_str to Timestamp matching ref_index's tz (or naive if ref naive)."""
+    ts = pd.to_datetime(date_str)
+    if ref_index.tz is not None:
+        # ts is naive — localize to ref tz
+        if ts.tz is None:
+            ts = ts.tz_localize(ref_index.tz)
+        else:
+            ts = ts.tz_convert(ref_index.tz)
+    # else: ref is naive, ts can stay naive
+    return ts
+
+
 def _render_chart(ohlc: pd.DataFrame, detection: dict) -> str:
     """OHLC + detection → matplotlib chart → base64 PNG."""
-    fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
+    # Use Figure() directly to avoid pyplot global state (thread-safe for gunicorn)
+    fig = Figure(figsize=(8, 4), dpi=100)
+    ax = fig.subplots()
     dates = ohlc.index
     ax.plot(dates, ohlc["Close"], color="#1E40AF", linewidth=1.5, label="Close")
 
@@ -143,7 +164,7 @@ def _render_chart(ohlc: pd.DataFrame, detection: dict) -> str:
             pt = detection.get(coord_key)
             if pt and pt.get("date") and pt.get("price") is not None:
                 try:
-                    d = pd.to_datetime(pt["date"]).tz_localize(dates.tz) if dates.tz else pd.to_datetime(pt["date"])
+                    d = _to_compatible_ts(pt["date"], dates)
                     ax.plot(d, pt["price"], "o", color=color_label[0], markersize=8)
                     ax.annotate(color_label[1], (d, pt["price"]),
                                 textcoords="offset points", xytext=(5, 5), fontsize=8)
@@ -158,17 +179,24 @@ def _render_chart(ohlc: pd.DataFrame, detection: dict) -> str:
         to_d = detection.get("to_date")
         if from_d and to_d:
             try:
-                d1 = pd.to_datetime(from_d).tz_localize(dates.tz) if dates.tz else pd.to_datetime(from_d)
-                d2 = pd.to_datetime(to_d).tz_localize(dates.tz) if dates.tz else pd.to_datetime(to_d)
+                d1 = _to_compatible_ts(from_d, dates)
+                d2 = _to_compatible_ts(to_d, dates)
                 ax.axvspan(d1, d2, alpha=0.15, color="#FBBF24")
             except Exception as e:
                 logger.debug("range box 실패: %s", e)
+        # Fix 5: 현재 가격 우상단 표시 (spec §4.3)
+        current_price = detection.get("current")
+        if current_price is not None:
+            ax.text(0.98, 0.97, f"현재 {current_price:,}",
+                    transform=ax.transAxes, fontsize=9, fontweight="bold",
+                    ha="right", va="top",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="#eff6ff", edgecolor="#1E40AF"))
     elif kind == "candle":
         # candle pattern: vertical line at detection date
         det_date = detection.get("date")
         if det_date:
             try:
-                d = pd.to_datetime(det_date).tz_localize(dates.tz) if dates.tz else pd.to_datetime(det_date)
+                d = _to_compatible_ts(det_date, dates)
                 ax.axvline(d, color="#DC2626" if detection.get("signal") == "매도" else "#16A34A",
                            linestyle="--", linewidth=1.5)
                 # 라벨
@@ -189,7 +217,7 @@ def _render_chart(ohlc: pd.DataFrame, detection: dict) -> str:
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100)
-    plt.close(fig)
+    # No plt.close() needed — Figure() is not registered with pyplot state machine
     buf.seek(0)
     return base64.b64encode(buf.read()).decode()
 
