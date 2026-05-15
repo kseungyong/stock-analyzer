@@ -27,6 +27,8 @@ from src import prediction_history
 from src import backtest as bt
 from src import analysis_cache
 from src import portfolio as portfolio_db
+from src import pattern_metadata as _pattern_meta
+from src import pattern_popup as _pattern_popup
 
 portfolio_db.init_db()
 
@@ -3396,6 +3398,64 @@ def portfolio_delete():
         portfolio_db.remove_holding(user, symbol)
         logger.info("portfolio.delete user=%s %s", user, symbol)
     return redirect(url_for("portfolio_view"), code=303)
+
+
+def _fetch_pattern_json_for_symbol(symbol: str) -> dict | None:
+    """analysis cache 에서 symbol 의 pattern_json 가져오기.
+
+    Returns:
+        파싱된 dict or None (cache row 없음 또는 pattern_json 컬럼 비어있음).
+    """
+    import json as _json
+    import sqlite3
+    from src.analysis_cache import _DB_PATH  # 기존 cache DB 경로
+
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT pattern_json FROM analysis_cache WHERE symbol = ?", (symbol,))
+        row = cur.fetchone()
+        conn.close()
+        if row is None or row[0] is None:
+            return None
+        return _json.loads(row[0])
+    except Exception as e:
+        logger.warning("_fetch_pattern_json_for_symbol %s 실패: %s", symbol, e)
+        return None
+
+
+@app.route("/api/pattern-popup/textbook", methods=["GET"])
+def api_pattern_popup_textbook():
+    """교과서 탭 — 패턴별 정적 SVG + 설명."""
+    pattern = request.args.get("pattern")
+    if not pattern:
+        return jsonify({"error": "pattern parameter required"}), 400
+    entry = _pattern_meta.lookup(pattern)
+    if entry is None:
+        return jsonify({"error": f"unknown pattern: {pattern}"}), 404
+    return jsonify({
+        "pattern": pattern,
+        "svg": entry["svg"],
+        "description_html": entry["description_html"],
+        "signal_typical": entry["signal_typical"],
+    })
+
+
+@app.route("/api/pattern-popup/actual", methods=["GET"])
+def api_pattern_popup_actual():
+    """실제 차트 탭 — 종목의 해당 패턴 검출 위치 마킹 차트."""
+    symbol = request.args.get("symbol")
+    pattern = request.args.get("pattern")
+    date = request.args.get("date")  # optional
+    if not symbol or not pattern:
+        return jsonify({"error": "symbol and pattern required"}), 400
+
+    pattern_json = _fetch_pattern_json_for_symbol(symbol)
+    if pattern_json is None:
+        return jsonify({"error": f"no analysis cache for symbol: {symbol}"}), 404
+
+    result = _pattern_popup.build_actual_chart(symbol, pattern, date, pattern_json)
+    return jsonify(result)
 
 
 def run_web(host: str = "0.0.0.0", port: int = 8080, debug: bool = False,
