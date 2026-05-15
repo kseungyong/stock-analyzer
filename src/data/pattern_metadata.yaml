@@ -331,3 +331,268 @@
   description_html: |
     <p><strong>형성:</strong> 긴 양봉 다음에 흑봉이 양봉의 중간 이하까지 관통. 관통형의 반대.</p>
     <p><strong>신호:</strong> 매도. 상승 추세 끝 반전 신호.</p>
+
+# === Tier 2: generic templates ===
+"긴다리 도지":
+  tier: 2
+  generic_template: doji_variant
+  signal_typical: 관망
+  description_short: 위·아래꼬리 모두 긴 도지
+
+"도지스타":
+  tier: 2
+  generic_template: doji_variant
+  signal_typical: 관망
+  description_short: gap 후 도지 출현 (반전 후보)
+
+"새벽 도지스타":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 새벽의 샛별의 도지 버전 (반전 강도 ↑)
+
+"저녁 도지스타":
+  tier: 2
+  generic_template: bearish_reversal
+  signal_typical: 매도
+  description_short: 저녁별의 도지 버전 (반전 강도 ↑)
+
+"3봉 내부":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 3봉 내포 (반전 후보)
+
+"3봉 외부":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 3봉 포함 (반전 후보)
+
+"3선 타격":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 3연속 봉 + 반대색 큰 봉
+
+"남쪽 3성":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 3개 흑봉 점진 감소 (반전 시사)
+
+"버려진 아이":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: gap 으로 고립된 도지 (강한 반전)
+
+"두 까마귀":
+  tier: 2
+  generic_template: bearish_reversal
+  signal_typical: 매도
+  description_short: 양봉 + 2 흑봉 (gap up 후 하락)
+
+"상승갭 두 까마귀":
+  tier: 2
+  generic_template: bearish_reversal
+  signal_typical: 매도
+  description_short: gap up 후 2 흑봉 (상승 추세 약화)
+
+"타구리":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 망치형 변종 (긴 아래꼬리)
+
+"팽이":
+  tier: 2
+  generic_template: neutral
+  signal_typical: 관망
+  description_short: 작은 몸통 + 양쪽 꼬리 (균형)
+
+"장대봉":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 꼬리 없는 큰 봉 (강한 한방향 압력)
+
+"벨트홀드":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 시가 = 고가/저가 + 반대 방향 진행
+
+"이탈형":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: gap 으로 추세 이탈 (5봉 패턴)
+
+"종가 장대봉":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 종가 = 고가/저가 인 장대봉
+
+"아기벽 가림":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 흑봉 + 가림 흑봉 (반전 후보)
+
+"반격선":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 반대 색 봉 + 종가 동일
+
+"사이드 갭 양봉":
+  tier: 2
+  generic_template: bullish_continuation
+  signal_typical: 매수
+  description_short: gap 후 2 양봉 (상승 지속)
+
+"고파동":
+  tier: 2
+  generic_template: neutral
+  signal_typical: 관망
+  description_short: 매우 긴 위·아래꼬리 (변동성 높음)
+
+"히카케":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: inside bar 함정 (반전 후보)
+
+"수정 히카케":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 히카케 패턴의 추가 확인 봉 포함
+
+"귀환 비둘기":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 하락 추세 끝 작은 양봉 (반전)
+
+"동일 3까마귀":
+  tier: 2
+  generic_template: bearish_continuation
+  signal_typical: 매도
+  description_short: 같은 종가 3 흑봉 (하락 지속)
+
+"인넥":
+  tier: 2
+  generic_template: bearish_continuation
+  signal_typical: 매도
+  description_short: 흑봉 + 양봉이 흑봉 저가 근처
+
+"킥킹":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 반대 색 marubozu 연속 (강한 반전)
+
+"킥킹 by 길이":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 킥킹 + 둘 중 긴 봉의 색이 신호 방향
+
+"사다리 바닥":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 4 하락 흑봉 + 위꼬리 흑봉 + 양봉
+
+"장대선":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 매우 긴 봉 (강한 한방향)
+
+"매칭 저점":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 2 흑봉 종가 일치 (지지 형성)
+
+"매트홀드":
+  tier: 2
+  generic_template: bullish_continuation
+  signal_typical: 매수
+  description_short: 양봉 + 작은 흑봉들 + 양봉 (상승 재개)
+
+"온넥":
+  tier: 2
+  generic_template: bearish_continuation
+  signal_typical: 매도
+  description_short: 흑봉 + 양봉이 흑봉 저가 도달
+
+"인력거꾼":
+  tier: 2
+  generic_template: doji_variant
+  signal_typical: 관망
+  description_short: 긴다리 도지 변종
+
+"상승/하락 삼법":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 추세 + 3 작은 반대봉 + 추세 (지속)
+
+"분리선":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: 반대 색 봉 + 시가 동일
+
+"단봉":
+  tier: 2
+  generic_template: neutral
+  signal_typical: 관망
+  description_short: 매우 짧은 봉 (변동 미미)
+
+"정체 패턴":
+  tier: 2
+  generic_template: bearish_reversal
+  signal_typical: 매도
+  description_short: 양봉 연속 후 작은 양봉 (정점 시사)
+
+"막대 샌드위치":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 흑봉 + 양봉 + 흑봉 (반전)
+
+"타스키 갭":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: gap + 반대 색 봉 (gap 부분 채움)
+
+"끼움형":
+  tier: 2
+  generic_template: bearish_continuation
+  signal_typical: 매도
+  description_short: 흑봉 + 양봉이 흑봉 중간 미만 (하락 지속)
+
+"3성":
+  tier: 2
+  generic_template: doji_variant
+  signal_typical: varies
+  description_short: 3 도지 연속 (매우 드문 반전)
+
+"유니크 3강":
+  tier: 2
+  generic_template: bullish_reversal
+  signal_typical: 매수
+  description_short: 3 흑봉 + 마지막 흑봉 안의 작은 흑봉 (반전)
+
+"사이드 갭 3법":
+  tier: 2
+  generic_template: neutral
+  signal_typical: varies
+  description_short: gap + 3 작은 봉 + gap 메꿈 (지속)

@@ -99,3 +99,24 @@ def test_description_html_xss_guard_blocks_event_attribute():
 """
     with pytest.raises(ValueError, match="event handler"):
         pm._parse_and_validate(malicious_yaml)
+
+
+def test_lookup_tier2_synthesizes_from_generic_template():
+    """tier:2 entry 는 generic template 합성."""
+    pm.reset_cache()
+    # _GENERIC_TEMPLATES 검증: 6 종류 있어야 함
+    assert set(pm._GENERIC_TEMPLATES.keys()) == {
+        "bullish_reversal", "bearish_reversal",
+        "bullish_continuation", "bearish_continuation",
+        "neutral", "doji_variant",
+    }
+
+
+def test_lookup_unknown_generic_template_returns_none():
+    """잘못된 generic_template 키면 None + warning."""
+    # 직접 _cache 조작 (테스트 격리)
+    pm._cache = {
+        "x": {"tier": 2, "generic_template": "nonexistent", "signal_typical": "관망"}
+    }
+    assert pm.lookup("x") is None
+    pm.reset_cache()
