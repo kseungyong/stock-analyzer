@@ -3443,7 +3443,7 @@ def _fetch_pattern_json_for_symbol(symbol: str) -> dict | None:
     try:
         with sqlite3.connect(_DB_PATH) as conn:
             cur = conn.cursor()
-            cur.execute("SELECT pattern_json FROM analysis_cache WHERE symbol = ?", (symbol,))
+            cur.execute("SELECT pattern_json FROM analysis_cache WHERE cache_key = ?", (symbol,))
             row = cur.fetchone()
         if row is None or row[0] is None:
             return None

@@ -120,6 +120,34 @@ def test_actual_only_get_method(client):
     assert resp.status_code == 405
 
 
+def test_fetch_pattern_json_sql_uses_correct_column():
+    """Regression: _fetch_pattern_json_for_symbol uses cache_key (not symbol).
+
+    Mocked tests in this file patch the helper directly so the SQL string is never
+    exercised. This test hits the real DB schema with a known-absent key — if SQL
+    references a wrong column, sqlite3 raises 'no such column' which is swallowed
+    by the broad except clause, but the warning log will contain the column error.
+    """
+    import logging
+    from src.web_app import _fetch_pattern_json_for_symbol
+
+    records: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, r): records.append(r.getMessage())
+
+    logger = logging.getLogger("src.web_app")
+    h = _Capture()
+    logger.addHandler(h)
+    try:
+        result = _fetch_pattern_json_for_symbol("NONEXISTENT_REGRESSION_KEY_XYZ")
+        assert result is None
+        for msg in records:
+            assert "no such column" not in msg.lower(), f"SQL column mismatch: {msg}"
+    finally:
+        logger.removeHandler(h)
+
+
 def test_textbook_triangle_variants(client):
     """3개 삼각형 변형 모두 매칭 (regression test for cross-task name mismatch)."""
     for pattern in ['상승 삼각형', '하락 삼각형', '삼각형 수렴 (대칭)']:
