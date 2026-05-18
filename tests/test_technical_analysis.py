@@ -213,3 +213,27 @@ class TestGenerateBnfSignal:
         assert result["market_disparity"] is None
         # disparity -11% +2, RSI 50 +0
         assert result["score"] == 2
+
+
+class TestResolveIndexMarket:
+    def test_kospi_suffix_ks(self):
+        from src.technical_analysis import resolve_index_market
+        assert resolve_index_market("005930.KS") == ("KOSPI", "korea")
+
+    def test_kosdaq_suffix_kq(self):
+        from src.technical_analysis import resolve_index_market
+        assert resolve_index_market("247540.KQ") == ("KOSDAQ", "kosdaq")
+
+    def test_us_no_suffix(self):
+        from src.technical_analysis import resolve_index_market
+        assert resolve_index_market("AAPL") == ("S&P 500", "us")
+
+    def test_us_with_dot_but_not_kr(self):
+        from src.technical_analysis import resolve_index_market
+        # BRK.B 같은 미국 심볼 — KR suffix 아니면 US
+        assert resolve_index_market("BRK.B") == ("S&P 500", "us")
+
+    def test_kosdaq_market_key_resolves_via_fetch_market_df(self):
+        """_MARKET_INDEX['kosdaq']가 ^KQ11로 매핑되는지 확인."""
+        from src.technical_analysis import _MARKET_INDEX
+        assert _MARKET_INDEX.get("kosdaq") == "^KQ11"

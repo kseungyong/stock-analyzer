@@ -8,18 +8,36 @@ logger = logging.getLogger(__name__)
 
 
 _MARKET_INDEX = {
-    "korea": "^KS11",   # KOSPI
-    "us":    "^GSPC",   # S&P 500
+    "korea":  "^KS11",   # KOSPI
+    "kosdaq": "^KQ11",   # KOSDAQ
+    "us":     "^GSPC",   # S&P 500
 }
 
 _market_cache: dict = {}  # {index: (df, cached_at_unix)}
 _MARKET_CACHE_TTL = 15 * 60  # 15분
 
 
+def resolve_index_market(symbol: str) -> tuple[str, str]:
+    """심볼 suffix로 (지수 표시명, market_key) 반환.
+
+    market_key는 _MARKET_INDEX의 키 — fetch_market_df()에 그대로 전달된다.
+
+    예:
+        '005930.KS' -> ('KOSPI', 'korea')
+        '247540.KQ' -> ('KOSDAQ', 'kosdaq')
+        'AAPL'      -> ('S&P 500', 'us')
+    """
+    if symbol.endswith(".KS"):
+        return ("KOSPI", "korea")
+    if symbol.endswith(".KQ"):
+        return ("KOSDAQ", "kosdaq")
+    return ("S&P 500", "us")
+
+
 def fetch_market_df(market: str):
     """시장 인덱스 데이터 fetch + 15분 TTL 메모리 캐시.
 
-    market: "korea" 또는 "us". 그 외/None/fetch 실패 시 None.
+    market: "korea" | "kosdaq" | "us". 그 외/None/fetch 실패 시 None.
 
     Returns: pd.DataFrame | None
     """
