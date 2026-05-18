@@ -109,12 +109,17 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
             logger.warning("generate_bnf_signal 실패 (분석은 계속): %s", e)
 
         from src.ml_predictor import analyze_sentiment
-        # ML 예측과 뉴스 수집을 동시에 실행
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            fut_pred = ex.submit(_engine.run, df, symbol)
-            fut_news = ex.submit(fetch_news, symbol)
-            prediction = fut_pred.result()
-            news = fut_news.result()
+        # SKIP_ML_PREDICTION=1: macOS libomp+fork segfault 회피용 escape hatch
+        if os.environ.get("SKIP_ML_PREDICTION") == "1":
+            prediction = {"skipped": True}
+            news = fetch_news(symbol)
+        else:
+            # ML 예측과 뉴스 수집을 동시에 실행
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                fut_pred = ex.submit(_engine.run, df, symbol)
+                fut_news = ex.submit(fetch_news, symbol)
+                prediction = fut_pred.result()
+                news = fut_news.result()
 
         # live 예측 저장 (DB 장애 → 분석 결과는 정상 반환)
         try:
