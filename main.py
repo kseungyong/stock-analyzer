@@ -20,7 +20,7 @@ except ImportError:
 
 import pandas as pd
 from src.data_fetcher import fetch_stock_data, fetch_multiple, fetch_news
-from src.technical_analysis import compute_indicators, generate_signal, generate_bnf_signal, fetch_market_df
+from src.technical_analysis import compute_indicators, generate_signal, generate_bnf_signal, fetch_market_df, compute_relative_performance
 from src.prediction_engine import PredictionEngine
 from src.report_generator import generate_report
 from src.email_sender import send_report
@@ -136,6 +136,15 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
         except Exception as e:
             logger.warning("pattern detection 실패 (분석은 계속): %s", e)
 
+        # 시장 지수 대비 등락률 (알파) — 실패해도 분석 본체 무관
+        # 시장 분류는 symbol suffix로 자동 결정 (KOSPI vs KOSDAQ 구분 필요).
+        # analyze_stock의 market 인자는 KOSPI/KOSDAQ을 구분하지 않으므로 사용하지 않음.
+        rel_perf = None
+        try:
+            rel_perf = compute_relative_performance(df, symbol)
+        except Exception as e:
+            logger.warning("compute_relative_performance 실패 (분석은 계속): %s", e)
+
         return {
             "name": name,
             "symbol": symbol,
@@ -143,6 +152,7 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
             "last_close": float(df["Close"].iloc[-1]),
             "signal": signal,
             "bnf_signal": bnf_signal,
+            "rel_perf": rel_perf,
             "prediction": prediction,
             "news": news,
             "sentiment": sentiment,

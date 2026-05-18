@@ -137,3 +137,20 @@ h1 {
 .section-title {
   margin: 12px 0 4px;
 }
+
+/* 시장 지수 대비 등락률 */
+.rel-perf {
+  margin: 4px 0;
+  font-size: 0.9em;
+  color: #555;
+}
+
+.rel-perf .up   { color: #28a745; font-weight: 600; }
+.rel-perf .down { color: #dc3545; font-weight: 600; }
+.rel-perf .flat { color: #6c757d; }
+
+.rel-perf-asof {
+  color: #999;
+  font-size: 0.85em;
+  margin-left: 6px;
+}
