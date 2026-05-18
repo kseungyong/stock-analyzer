@@ -124,7 +124,11 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
         except Exception as e:
             logger.warning("insert_live 실패 (분석 결과는 정상 반환): %s", e)
 
-        sentiment = analyze_sentiment(news)
+        # SKIP_SENTIMENT=1: FinBERT segfault 회피용 escape hatch (huggingface fork 충돌)
+        if os.environ.get("SKIP_SENTIMENT") == "1":
+            sentiment = {"label": "건너뜀", "score": 0.0, "details": []}
+        else:
+            sentiment = analyze_sentiment(news)
 
         # Pattern indicators (Phase A: 이동평균 4상태) — 실패해도 분석 본체 무관
         patterns = None
