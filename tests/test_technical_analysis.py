@@ -237,3 +237,158 @@ class TestResolveIndexMarket:
         """_MARKET_INDEX['kosdaq']가 ^KQ11로 매핑되는지 확인."""
         from src.technical_analysis import _MARKET_INDEX
         assert _MARKET_INDEX.get("kosdaq") == "^KQ11"
+
+
+class TestStageLabel:
+    """_stage_label — KST 기준 시장 운영 단계 판별."""
+
+    def _kst(self, year, month, day, hour, minute):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    def test_korea_market_open_at_open(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 09:00 KST
+        assert _stage_label(self._kst(2026, 5, 18, 9, 0), "korea") == "market_open"
+
+    def test_korea_market_open_at_close(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 15:30 KST (경계 — 포함)
+        assert _stage_label(self._kst(2026, 5, 18, 15, 30), "korea") == "market_open"
+
+    def test_korea_before_open(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 08:59 KST
+        assert _stage_label(self._kst(2026, 5, 18, 8, 59), "korea") == "before_open"
+
+    def test_korea_after_close(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 15:31 KST
+        assert _stage_label(self._kst(2026, 5, 18, 15, 31), "korea") == "after_close"
+
+    def test_kosdaq_uses_korea_hours(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 10:00 KST
+        assert _stage_label(self._kst(2026, 5, 18, 10, 0), "kosdaq") == "market_open"
+
+    def test_us_market_open_late_night(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 23:00 KST
+        assert _stage_label(self._kst(2026, 5, 18, 23, 0), "us") == "market_open"
+
+    def test_us_market_open_early_morning(self):
+        from src.technical_analysis import _stage_label
+        # 화요일 03:00 KST
+        assert _stage_label(self._kst(2026, 5, 19, 3, 0), "us") == "market_open"
+
+    def test_us_after_close(self):
+        from src.technical_analysis import _stage_label
+        # 화요일 07:00 KST
+        assert _stage_label(self._kst(2026, 5, 19, 7, 0), "us") == "after_close"
+
+    def test_us_before_open(self):
+        from src.technical_analysis import _stage_label
+        # 월요일 12:00 KST (장 시작 전, 한국 시간 기준 점심)
+        assert _stage_label(self._kst(2026, 5, 18, 12, 0), "us") == "before_open"
+
+    def test_weekend_saturday(self):
+        from src.technical_analysis import _stage_label
+        # 토요일 14:00 KST
+        assert _stage_label(self._kst(2026, 5, 23, 14, 0), "korea") == "weekend"
+
+    def test_weekend_sunday(self):
+        from src.technical_analysis import _stage_label
+        # 일요일 14:00 KST
+        assert _stage_label(self._kst(2026, 5, 24, 14, 0), "us") == "weekend"
+
+
+class TestComputeRelativePerformance:
+    """compute_relative_performance — 종목 vs 시장 인덱스 등락률 계산."""
+
+    def _stock_df(self, prev: float, last: float):
+        """Close 2개만 있는 최소 fixture."""
+        idx = pd.date_range("2026-05-15", periods=2, freq="B")
+        return pd.DataFrame({
+            "Close": [prev, last],
+            "Open":  [prev, last],
+            "High":  [prev, last],
+            "Low":   [prev, last],
+            "Volume": [1, 1],
+        }, index=idx)
+
+    def test_basic_positive_alpha(self, monkeypatch):
+        """종목 +2%, 인덱스 +1% -> 알파 +1pp"""
+        from src import technical_analysis as ta_mod
+        stock = self._stock_df(100.0, 102.0)   # +2%
+        index = self._stock_df(1000.0, 1010.0)  # +1%
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: index)
+
+        result = ta_mod.compute_relative_performance(stock, "005930.KS")
+
+        assert result is not None
+        assert result["index_name"] == "KOSPI"
+        assert result["stock_pct"] == pytest.approx(2.0, abs=1e-6)
+        assert result["index_pct"] == pytest.approx(1.0, abs=1e-6)
+        assert result["alpha_pp"]  == pytest.approx(1.0, abs=1e-6)
+        assert "as_of" in result
+        assert "stage" in result
+
+    def test_negative_alpha_us(self, monkeypatch):
+        """종목 -1%, S&P +0.5% -> 알파 -1.5pp, US 매핑"""
+        from src import technical_analysis as ta_mod
+        stock = self._stock_df(200.0, 198.0)    # -1%
+        index = self._stock_df(5000.0, 5025.0)  # +0.5%
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: index)
+
+        result = ta_mod.compute_relative_performance(stock, "AAPL")
+
+        assert result["index_name"] == "S&P 500"
+        assert result["stock_pct"] == pytest.approx(-1.0, abs=1e-6)
+        assert result["index_pct"] == pytest.approx(0.5, abs=1e-6)
+        assert result["alpha_pp"]  == pytest.approx(-1.5, abs=1e-6)
+
+    def test_short_df_returns_none(self, monkeypatch):
+        """len(df) < 2 -> None (신규상장 등)"""
+        from src import technical_analysis as ta_mod
+        idx = pd.date_range("2026-05-18", periods=1, freq="B")
+        stock = pd.DataFrame({"Close": [100.0]}, index=idx)
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: self._stock_df(1000, 1010))
+
+        assert ta_mod.compute_relative_performance(stock, "005930.KS") is None
+
+    def test_index_fetch_fail_returns_none(self, monkeypatch):
+        """fetch_market_df가 None 반환 -> None"""
+        from src import technical_analysis as ta_mod
+        stock = self._stock_df(100.0, 102.0)
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: None)
+
+        assert ta_mod.compute_relative_performance(stock, "005930.KS") is None
+
+    def test_short_index_df_returns_none(self, monkeypatch):
+        """인덱스 df도 len < 2면 None"""
+        from src import technical_analysis as ta_mod
+        stock = self._stock_df(100.0, 102.0)
+        short_idx = pd.DataFrame({"Close": [1000.0]},
+                                  index=pd.date_range("2026-05-18", periods=1, freq="B"))
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: short_idx)
+
+        assert ta_mod.compute_relative_performance(stock, "005930.KS") is None
+
+    def test_zero_prev_close_returns_none(self, monkeypatch):
+        """전일 종가 0 -> div-by-zero 방어, None"""
+        from src import technical_analysis as ta_mod
+        stock = self._stock_df(0.0, 1.0)
+        index = self._stock_df(1000.0, 1010.0)
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: index)
+
+        assert ta_mod.compute_relative_performance(stock, "005930.KS") is None
+
+    def test_zero_prev_index_returns_none(self, monkeypatch):
+        """인덱스 전일 종가 0 -> None"""
+        from src import technical_analysis as ta_mod
+        stock = self._stock_df(100.0, 102.0)
+        index = self._stock_df(0.0, 1.0)
+        monkeypatch.setattr(ta_mod, "fetch_market_df", lambda mk: index)
+
+        assert ta_mod.compute_relative_performance(stock, "005930.KS") is None
