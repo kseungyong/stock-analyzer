@@ -157,7 +157,7 @@ def get(cache_key: str) -> dict | None:
                       signal_value, signal_score,
                       bnf_signal_value, bnf_signal_score,
                       pattern_json, pattern_signal, pattern_score,
-                      last_close
+                      last_close, rel_perf_json
                FROM analysis_cache WHERE cache_key = ?""",
             (cache_key,),
         ).fetchone()
@@ -177,6 +177,7 @@ def get(cache_key: str) -> dict | None:
         "pattern_signal": row[10] if len(row) > 10 else None,
         "pattern_score": row[11] if len(row) > 11 else None,
         "last_close": row[12] if len(row) > 12 else None,
+        "rel_perf_json": row[13] if len(row) > 13 else None,
     }
 
 
