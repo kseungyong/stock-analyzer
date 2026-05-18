@@ -244,6 +244,49 @@ def _render_sentiment(sentiment: dict) -> str:
     )
 
 
+_STAGE_LABEL = {
+    "market_open": "장중",
+    "after_close": "마감 후",
+    "before_open": "장 시작 전",
+    "weekend": "주말",
+}
+
+
+def _norm_zero(x: float) -> float:
+    """-0.0을 +0.0으로 정규화. float 연산이 -0.0을 만들 수 있어 클래스(flat)와 표시(-0.00%)가 어긋나는 것을 방지."""
+    return 0.0 if x == 0 else x
+
+
+def _rel_perf_class(value: float) -> str:
+    if value > 0:
+        return "up"
+    if value < 0:
+        return "down"
+    return "flat"
+
+
+def _render_rel_perf(rel_perf: dict | None) -> str:
+    """종목 vs 시장 인덱스 등락률 한 줄 렌더. None이면 빈 문자열."""
+    if not rel_perf:
+        return ""
+    stock_pct = _norm_zero(rel_perf["stock_pct"])
+    index_pct = _norm_zero(rel_perf["index_pct"])
+    alpha_pp = _norm_zero(rel_perf["alpha_pp"])
+    index_name = html.escape(rel_perf["index_name"])
+    as_of = html.escape(rel_perf.get("as_of", ""))
+    stage = _STAGE_LABEL.get(rel_perf.get("stage", ""), "")
+    asof_suffix = f"{as_of}, {stage}" if stage else as_of
+
+    return (
+        '<p class="rel-perf">'
+        f'금일: <span class="{_rel_perf_class(stock_pct)}">{stock_pct:+.2f}%</span>'
+        f' │ {index_name}: <span class="{_rel_perf_class(index_pct)}">{index_pct:+.2f}%</span>'
+        f' │ 알파: <span class="{_rel_perf_class(alpha_pp)}">{alpha_pp:+.2f}%pp</span>'
+        f' <span class="rel-perf-asof">({asof_suffix})</span>'
+        '</p>'
+    )
+
+
 def _render_stock_card(item: dict) -> str:
     """종목 분석 카드 HTML을 반환한다."""
     name = html.escape(item["name"])
@@ -258,6 +301,7 @@ def _render_stock_card(item: dict) -> str:
     hit_rate_html = _render_hit_rate_section(item["symbol"])
     news_html = _render_news(item.get("news", []))
     sentiment_html = _render_sentiment(item.get("sentiment", {}))
+    rel_perf_html = _render_rel_perf(item.get("rel_perf"))
 
     return f"""
     <div class="stock-card">
@@ -265,6 +309,7 @@ def _render_stock_card(item: dict) -> str:
         <p class="stock-summary">현재가: <b>{sig['close']:,.2f}</b> | RSI: {sig['rsi']}
            | <span class="{signal_cls}">{sig['signal']}</span> (점수: {sig['score']})</p>
         <p class="stock-reasons">{', '.join(sig['reasons']) if sig['reasons'] else '특이사항 없음'}</p>
+        {rel_perf_html}
         {sentiment_html}
         <h4 class="section-title">기술 지표 분석</h4>
         {indicators_html}

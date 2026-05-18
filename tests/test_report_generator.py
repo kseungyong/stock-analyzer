@@ -243,3 +243,92 @@ class TestHitRateSection:
         from src.report_generator import generate_report
         html_out = generate_report([self._analysis()])
         assert "데이터 부족" in html_out
+
+
+class TestRenderRelPerf:
+    """_render_rel_perf — 종목 vs 인덱스 등락률 한 줄 렌더."""
+
+    def test_none_returns_empty(self):
+        from src.report_generator import _render_rel_perf
+        assert _render_rel_perf(None) == ""
+
+    def test_positive_stock_index_alpha(self):
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "S&P 500",
+            "stock_pct": 1.52,
+            "index_pct": 0.81,
+            "alpha_pp": 0.71,
+            "as_of": "2026-05-18 14:32",
+            "stage": "market_open",
+        })
+        assert "rel-perf" in html
+        assert "+1.52%" in html
+        assert "+0.81%" in html
+        assert "+0.71%pp" in html
+        assert "S&amp;P 500" in html
+        assert "장중" in html
+        # 양수는 'up' class
+        assert html.count('class="up"') >= 3
+
+    def test_negative_alpha(self):
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "KOSPI",
+            "stock_pct": -2.10,
+            "index_pct": 0.50,
+            "alpha_pp": -2.60,
+            "as_of": "2026-05-18 16:05",
+            "stage": "after_close",
+        })
+        assert "-2.10%" in html
+        assert "+0.50%" in html
+        assert "-2.60%pp" in html
+        assert "마감 후" in html
+        assert 'class="down"' in html
+        assert 'class="up"' in html  # index_pct 양수
+
+    def test_zero_uses_flat_class(self):
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "KOSDAQ",
+            "stock_pct": 0.0,
+            "index_pct": 0.0,
+            "alpha_pp": 0.0,
+            "as_of": "2026-05-18 09:00",
+            "stage": "market_open",
+        })
+        assert 'class="flat"' in html
+        assert "+0.00%" in html or "0.00%" in html
+
+    def test_stage_before_open_label(self):
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "KOSPI", "stock_pct": 1.0, "index_pct": 0.5,
+            "alpha_pp": 0.5, "as_of": "2026-05-18 08:00", "stage": "before_open",
+        })
+        assert "장 시작 전" in html
+
+    def test_stage_weekend_label(self):
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "KOSPI", "stock_pct": 1.0, "index_pct": 0.5,
+            "alpha_pp": 0.5, "as_of": "2026-05-17 14:00", "stage": "weekend",
+        })
+        assert "주말" in html
+
+    def test_negative_zero_normalized_to_flat(self):
+        """-0.0 입력 시 flat class + +0.00% 표시 (불일치 방지)."""
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "KOSPI",
+            "stock_pct": -0.0,
+            "index_pct": -0.0,
+            "alpha_pp": -0.0,
+            "as_of": "2026-05-18 09:00",
+            "stage": "market_open",
+        })
+        assert "-0.00%" not in html  # -0.00% 표시 금지
+        assert "+0.00%" in html      # +0.00%만 표시
+        assert 'class="flat"' in html
+        assert 'class="down"' not in html
