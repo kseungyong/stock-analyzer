@@ -332,3 +332,12 @@ class TestRenderRelPerf:
         assert "+0.00%" in html      # +0.00%만 표시
         assert 'class="flat"' in html
         assert 'class="down"' not in html
+
+    def test_unknown_stage_visible_sentinel(self):
+        """알 수 없는 stage 값은 silent하게 숨기지 않고 '?xxx' 형태로 노출."""
+        from src.report_generator import _render_rel_perf
+        html = _render_rel_perf({
+            "index_name": "KOSPI", "stock_pct": 1.0, "index_pct": 0.5,
+            "alpha_pp": 0.5, "as_of": "2026-05-18 09:00", "stage": "bogus_state",
+        })
+        assert "?bogus_state" in html

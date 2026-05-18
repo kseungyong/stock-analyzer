@@ -274,7 +274,9 @@ def _render_rel_perf(rel_perf: dict | None) -> str:
     alpha_pp = _norm_zero(rel_perf["alpha_pp"])
     index_name = html.escape(rel_perf["index_name"])
     as_of = html.escape(rel_perf.get("as_of", ""))
-    stage = _STAGE_LABEL.get(rel_perf.get("stage", ""), "")
+    stage_key = rel_perf.get("stage", "")
+    # 알 수 없는 stage 값을 silent하게 숨기지 않고 가시적인 sentinel로 노출 — 디버깅 보조
+    stage = _STAGE_LABEL.get(stage_key, f"?{stage_key}" if stage_key else "")
     asof_suffix = f"{as_of}, {stage}" if stage else as_of
 
     return (
