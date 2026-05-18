@@ -15,16 +15,132 @@ stocks:
     symbol: 005930.KS
   - name: SK하이닉스
     symbol: 000660.KS
-  - name: 현대자동차
+  - name: 현대차
     symbol: 005380.KS
   - name: 현대로템
     symbol: 064350.KS
-  - name: 삼성sdi
+  - name: 삼성SDI
     symbol: 006400.KS
   - name: 대우건설
     symbol: 047040.KS
-  - name: 대우
-    symbol: 004.KS
+  - name: 미래에셋증권
+    symbol: 006800.KS
+  - name: 삼성증권
+    symbol: 016360.KS
+  - name: 한화시스템
+    symbol: 272210.KS
+  - name: 두산로보틱스
+    symbol: 454910.KS
+  - name: POSCO홀딩스
+    symbol: 005490.KS
+  - name: 우리금융지주
+    symbol: 316140.KS
+  - name: 두산에너빌리티
+    symbol: 034020.KS
+  - name: NAVER
+    symbol: 035420.KS
+  - name: 에코프로비엠
+    symbol: 247540.KQ
+  - name: S-Oil
+    symbol: 010950.KS
+  - name: SK
+    symbol: 034730.KS
+  - name: 삼성물산
+    symbol: 028260.KS
+  - name: 하이브
+    symbol: 352820.KS
+  - name: 고려아연
+    symbol: 010130.KS
+  - name: 삼성전기
+    symbol: 009150.KS
+  - name: 한국조선해양
+    symbol: 009540.KS
+  - name: 삼성생명
+    symbol: 032830.KS
+  - name: KT&G
+    symbol: 033780.KS
+  - name: HMM
+    symbol: 011200.KS
+  - name: 엔씨소프트
+    symbol: 036570.KS
+  - name: 대한항공
+    symbol: 003490.KS
+  - name: 신한지주
+    symbol: 055550.KS
+  - name: 현대모비스
+    symbol: 012330.KS
+  - name: 삼성에스디에스
+    symbol: 018260.KS
+  - name: KT
+    symbol: 030200.KS
+  - name: LG화학
+    symbol: 051910.KS
+  - name: KB금융
+    symbol: 105560.KS
+  - name: 포스코퓨처엠
+    symbol: 003670.KS
+  - name: LG
+    symbol: 003550.KS
+  - name: 셀트리온제약
+    symbol: 068760.KQ
+  - name: SK이노베이션
+    symbol: 096770.KS
+  - name: LG전자
+    symbol: 066570.KS
+  - name: 카카오
+    symbol: 035720.KS
+  - name: 현대중공업
+    symbol: 267250.KS
+  - name: 하나금융지주
+    symbol: 086790.KS
+  - name: 기아
+    symbol: 000270.KS
+  - name: 크래프톤
+    symbol: 259960.KS
+  - name: 카카오게임즈
+    symbol: 293490.KQ
+  - name: JYP Ent.
+    symbol: 035900.KQ
+  - name: 알테오젠
+    symbol: 196170.KQ
+  - name: 위메이드
+    symbol: 112040.KQ
+  - name: 루닛
+    symbol: 328130.KQ
+  - name: 두산로보틱스
+    symbol: 336260.KQ
+  - name: 휴젤
+    symbol: 145020.KQ
+  - name: 에코프로
+    symbol: 086520.KQ
+  - name: HPSP
+    symbol: 403870.KQ
+  - name: 에스엠
+    symbol: 041510.KQ
+  - name: 펄어비스
+    symbol: 263750.KQ
+  - name: 코오롱인더스트리
+    symbol: 950160.KQ
+  - name: 이오테크닉스
+    symbol: 039030.KQ
+  - name: KODEX 200
+    symbol: 069500.KS
+  - name: TIGER 200
+    symbol: 102110.KS
+  - name: KODEX 반도체
+    symbol: 091160.KS
+  - name: KODEX 은행
+    symbol: 091170.KS
+  - name: KODEX 2차전지산업
+    symbol: 305720.KS
+  - name: TIGER 미국나스닥100
+    symbol: 381170.KS
+  - name: 덕산테코피아
+    symbol: 317330.KQ
+  - name: 한화오션
+    symbol: 042660.KS
+  - name: KODEX AI전력핵심설비
+    symbol: 487240.KS
   us:
   - name: Apple
     symbol: AAPL
@@ -42,5 +158,11 @@ stocks:
     symbol: TECL
   - name: Proshares Ultra Semiconductor
     symbol: USD
-  - name: 삼성
-    symbol: SAM
+  - name: Direxion Daily South Korea Bull
+    symbol: KORU
+  - name: SPDR S&P 500
+    symbol: SPY
+  - name: Invesco QQQ
+    symbol: QQQ
+  - name: Vanguard Total Stock Market
+    symbol: VTI
