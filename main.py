@@ -406,7 +406,8 @@ def main():
 
     if args.command == "auto-analyze":
         auto_analyze_market(args.market)
-        return
+        # torch/transformers cleanup 중 종료 segfault 회피 — DB는 매 종목 commit 됨
+        os._exit(0)
 
     if args.command == "backfill":
         prediction_history.backfill_all(fetch_fn=fetch_stock_data)
