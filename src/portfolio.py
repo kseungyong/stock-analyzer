@@ -266,7 +266,7 @@ def list_holdings_with_pnl(username: str) -> list[dict]:
                       c.signal_value, c.signal_score,
                       c.bnf_signal_value, c.bnf_signal_score,
                       c.pattern_json, c.pattern_signal, c.pattern_score,
-                      c.generated_at
+                      c.generated_at, c.rel_perf_json
                FROM portfolio p
                LEFT JOIN analysis_cache c ON p.symbol = c.cache_key
                WHERE p.username = ?
@@ -299,6 +299,7 @@ def list_holdings_with_pnl(username: str) -> list[dict]:
             "pattern_signal": r[12],
             "pattern_score": r[13],
             "generated_at": r[14],
+            "rel_perf_json": r[15] if len(r) > 15 else None,
             "pnl_pct": pnl_pct,
             "pnl_abs": pnl_abs,
         })

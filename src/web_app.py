@@ -2806,6 +2806,30 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
         except (ValueError, KeyError):
             pass
 
+    alpha_badge_html = ""
+    if h.get("rel_perf_json"):
+        try:
+            import json as _json
+            rp = _json.loads(h["rel_perf_json"])
+            alpha_pp = rp.get("alpha_pp")
+            if alpha_pp is not None:
+                if alpha_pp > 0:
+                    a_color, a_sign = "#16A34A", "+"
+                elif alpha_pp < 0:
+                    a_color, a_sign = "#DC2626", ""
+                else:
+                    a_color, a_sign = "#64748B", ""
+                idx = rp.get("index_name", "")
+                stock_pct = rp.get("stock_pct", 0.0)
+                index_pct = rp.get("index_pct", 0.0)
+                title = f"vs {idx}: 종목 {stock_pct:+.2f}% / 지수 {index_pct:+.2f}%"
+                alpha_badge_html = (
+                    f'<span class="badge" style="background:{a_color};color:#fff;font-weight:600;" '
+                    f'title="{escape(title)}">α {a_sign}{alpha_pp:.2f}pp</span>'
+                )
+        except (ValueError, KeyError, TypeError):
+            pass
+
     # data-* 로 symbol/notes 전달 — JS 가 escape 안전하게 prompt 호출
     btn_data = f'data-edit-notes data-symbol="{escape(sym)}" data-notes="{escape(notes)}"'
     if notes:
@@ -2843,6 +2867,7 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
                 title="Tech+BNF+Pattern×0.5">📊 {comp_sign}{composite:.1f}</span>
           {signal_badge_html}
           {bnf_badge_html}
+          {alpha_badge_html}
           {pattern_badge_html}
           <span class="badge {badge_cls}">{market_label}</span>
         </div>
