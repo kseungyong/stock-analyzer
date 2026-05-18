@@ -189,7 +189,11 @@ class TestAnalyzeStockBnfSignal:
         assert "signal" in result["bnf_signal"]
 
     def test_analyze_stock_market_none_bnf_uses_no_market(self, monkeypatch):
-        """market=None → bnf_signal['market_disparity']=None, fetch_market_df 호출 안 됨."""
+        """market=None → bnf_signal['market_disparity']=None.
+
+        compute_relative_performance은 내부적으로 fetch_market_df를 호출하므로
+        BnF 경로만 격리하기 위해 compute_relative_performance를 별도로 모킹한다.
+        """
         import main
         from src import technical_analysis as ta_mod
         import pandas as pd, numpy as np
@@ -204,13 +208,17 @@ class TestAnalyzeStockBnfSignal:
         monkeypatch.setattr(main, "fetch_news", lambda s: [])
         monkeypatch.setattr(main._engine, "run", lambda df, sym: {})
         monkeypatch.setattr("src.ml_predictor.analyze_sentiment", lambda news: {})
+        # compute_relative_performance을 스텁 처리하여 BnF 경로만 격리
+        # main.py는 직접 import하므로 main 모듈 네임스페이스에서 패치해야 함
+        monkeypatch.setattr(main, "compute_relative_performance", lambda df, sym: None)
 
-        called = []
+        bnf_called = []
         monkeypatch.setattr(ta_mod, "fetch_market_df",
-                            lambda mkt: (called.append(mkt), fake_df)[1])
+                            lambda mkt: (bnf_called.append(mkt), fake_df)[1])
 
         result = main.analyze_stock("AAPL", "Apple")  # market 인자 없이
         assert result is not None
         assert result["bnf_signal"] is not None
         assert result["bnf_signal"]["market_disparity"] is None
-        assert called == []
+        # BnF 경로에서는 market=None이므로 fetch_market_df 호출 없어야 함
+        assert bnf_called == []
