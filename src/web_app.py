@@ -241,6 +241,8 @@ def _run_analysis_bg(job_id: str, symbol: str, name: str) -> None:
                     pattern_signal=pat_summary.get("signal"),
                     pattern_score=pat_summary.get("score"),
                     last_close=result.get("last_close"),
+                    rel_perf_json=_json.dumps(result["rel_perf"], ensure_ascii=False)
+                                  if result.get("rel_perf") else None,
                 )
             except Exception as e:
                 logger.warning("analysis_cache.put 실패 (job 결과는 정상): %s", e)
@@ -1557,6 +1559,36 @@ def index():
             except (ValueError, KeyError):
                 pass
 
+        # 알파 배지 — 종목 vs 시장 지수 등락률 (rel_perf_json)
+        alpha_badge_html = ""
+        if cache_row and cache_row.get("rel_perf_json"):
+            try:
+                import json as _json
+                rp = _json.loads(cache_row["rel_perf_json"])
+                alpha_pp = rp.get("alpha_pp")
+                if alpha_pp is not None:
+                    if alpha_pp > 0:
+                        a_color = "#16A34A"
+                        sign = "+"
+                    elif alpha_pp < 0:
+                        a_color = "#DC2626"
+                        sign = ""
+                    else:
+                        a_color = "#64748B"
+                        sign = ""
+                    idx = rp.get("index_name", "")
+                    stock_pct = rp.get("stock_pct", 0.0)
+                    index_pct = rp.get("index_pct", 0.0)
+                    title = (
+                        f"vs {idx}: 종목 {stock_pct:+.2f}% / 지수 {index_pct:+.2f}%"
+                    )
+                    alpha_badge_html = (
+                        f'<span class="badge" style="background:{a_color};color:#fff;font-weight:600;" '
+                        f'title="{escape(title)}">α {sign}{alpha_pp:.2f}pp</span>'
+                    )
+            except (ValueError, KeyError, TypeError):
+                pass
+
         # Composite 배지 — Tech + BNF + Pattern×0.5
         composite_badge_html = ""
         if cache_row is not None:
@@ -1588,6 +1620,7 @@ def index():
               {composite_badge_html}
               {signal_badge_html}
               {bnf_badge_html}
+              {alpha_badge_html}
               {pattern_badge_html}
               <span class="badge {badge_cls}">{market_label}</span>
             </div>

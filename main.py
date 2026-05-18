@@ -247,6 +247,8 @@ def auto_analyze_market(market: str) -> None:
                 pattern_signal=pat_summary.get("signal"),
                 pattern_score=pat_summary.get("score"),
                 last_close=result.get("last_close"),
+                rel_perf_json=_json.dumps(result["rel_perf"], ensure_ascii=False)
+                              if result.get("rel_perf") else None,
             )
             success += 1
         except Exception as e:
