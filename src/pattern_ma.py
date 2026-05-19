@@ -66,6 +66,7 @@ def detect_ma_state(df: pd.DataFrame) -> dict:
     if cross_up and uptrend:
         return {
             "signal": "매수",
+            "name": "골든크로스",
             "label": f"골든크로스 + 장기선 우상향 (200일 +{slope*100:.2f}%)",
             "confidence": min(1.0, 0.5 + abs(slope) * 50),
             "ma": ma_summary,
@@ -73,6 +74,7 @@ def detect_ma_state(df: pd.DataFrame) -> dict:
     if cross_up and downtrend:
         return {
             "signal": "사지마",
+            "name": "골든크로스",
             "label": f"골든크로스이지만 장기선 하향 ({slope*100:.2f}%) — false breakout 위험",
             "confidence": 0.4,
             "ma": ma_summary,
@@ -80,6 +82,7 @@ def detect_ma_state(df: pd.DataFrame) -> dict:
     if cross_down and downtrend:
         return {
             "signal": "매도",
+            "name": "데드크로스",
             "label": f"데드크로스 + 장기선 하향 ({slope*100:.2f}%)",
             "confidence": min(1.0, 0.5 + abs(slope) * 50),
             "ma": ma_summary,
@@ -87,6 +90,7 @@ def detect_ma_state(df: pd.DataFrame) -> dict:
     if cross_down and uptrend:
         return {
             "signal": "팔지마",
+            "name": "데드크로스",
             "label": f"데드크로스이지만 장기선 우상향 (+{slope*100:.2f}%) — 단기 조정 가능",
             "confidence": 0.4,
             "ma": ma_summary,
@@ -96,6 +100,7 @@ def detect_ma_state(df: pd.DataFrame) -> dict:
     if uptrend and last_short > last_mid:
         return {
             "signal": "매수",
+            "name": "정배열",
             "label": f"단기 > 중기, 장기 우상향 ({slope*100:.2f}%)",
             "confidence": 0.55,
             "ma": ma_summary,
@@ -103,12 +108,14 @@ def detect_ma_state(df: pd.DataFrame) -> dict:
     if downtrend and last_short < last_mid:
         return {
             "signal": "매도",
+            "name": "역배열",
             "label": f"단기 < 중기, 장기 하향 ({slope*100:.2f}%)",
             "confidence": 0.55,
             "ma": ma_summary,
         }
     return {
         "signal": "관망",
+        "name": "추세 미확정",
         "label": "추세 미확정 (이동평균선 혼재)",
         "confidence": 0.3,
         "ma": ma_summary,

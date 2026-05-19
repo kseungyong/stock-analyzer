@@ -630,3 +630,78 @@
   generic_template: neutral
   signal_typical: varies
   description_short: gap + 3 작은 봉 + gap 메꿈 (지속)
+
+"골든크로스":
+  signal_typical: 매수
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="10,80 40,75 70,68 100,55 130,40 160,30 190,22" fill="none" stroke="#ff7f0e" stroke-width="2"/>
+      <polyline points="10,55 40,55 70,55 100,55 130,55 160,55 190,55" fill="none" stroke="#2ca02c" stroke-width="2"/>
+      <circle cx="100" cy="55" r="4" fill="#16A34A"/>
+      <text x="14" y="50" font-size="8" fill="#ff7f0e">단기(5/10)</text>
+      <text x="14" y="68" font-size="8" fill="#2ca02c">장기(50/200)</text>
+      <text x="108" y="50" font-size="9" fill="#16A34A">교차</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 단기 이동평균선이 장기 이동평균선을 아래에서 위로 돌파 (교차).</p>
+    <p><strong>신호:</strong> 강한 매수 — 추세 시작. 다만 과매수 구간 (RSI 70+) 에선 단기 조정 가능.</p>
+    <p><strong>검출:</strong> 5/10일 SMA 가 50/200일 SMA 를 상향 돌파한 최근 1~2 봉.</p>
+
+"데드크로스":
+  signal_typical: 매도
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="10,22 40,30 70,40 100,55 130,68 160,75 190,80" fill="none" stroke="#ff7f0e" stroke-width="2"/>
+      <polyline points="10,55 40,55 70,55 100,55 130,55 160,55 190,55" fill="none" stroke="#d62728" stroke-width="2"/>
+      <circle cx="100" cy="55" r="4" fill="#DC2626"/>
+      <text x="14" y="20" font-size="8" fill="#ff7f0e">단기(5/10)</text>
+      <text x="14" y="68" font-size="8" fill="#d62728">장기(50/200)</text>
+      <text x="108" y="50" font-size="9" fill="#DC2626">교차</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 단기 이동평균선이 장기 이동평균선을 위에서 아래로 돌파 (교차).</p>
+    <p><strong>신호:</strong> 강한 매도 — 추세 전환. 장기선이 우상향 중이면 "팔지마" (단기 조정 가능).</p>
+    <p><strong>검출:</strong> 5/10일 SMA 가 50/200일 SMA 를 하향 돌파한 최근 1~2 봉.</p>
+
+"정배열":
+  signal_typical: 매수
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="10,55 40,48 70,42 100,36 130,30 160,25 190,20" fill="none" stroke="#ff7f0e" stroke-width="2"/>
+      <polyline points="10,65 40,60 70,55 100,50 130,45 160,40 190,35" fill="none" stroke="#2ca02c" stroke-width="2"/>
+      <polyline points="10,80 40,77 70,73 100,70 130,67 160,64 190,60" fill="none" stroke="#1f77b4" stroke-width="2"/>
+      <text x="14" y="50" font-size="8" fill="#ff7f0e">단기</text>
+      <text x="14" y="60" font-size="8" fill="#2ca02c">중기</text>
+      <text x="14" y="75" font-size="8" fill="#1f77b4">장기 (우상향)</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 단기 > 중기 > 장기 순으로 SMA 배치되고 장기선이 우상향. Cross 없이도 강한 추세.</p>
+    <p><strong>신호:</strong> 매수 — 안정적 상승 추세. 골든크로스만큼 강하진 않지만 추세 유지 시 신뢰도 높음.</p>
+    <p><strong>검출:</strong> last_short > last_mid AND 장기선 기울기 > 임계값 (cross 시그널 없음).</p>
+
+"역배열":
+  signal_typical: 매도
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="10,20 40,25 70,30 100,36 130,42 160,48 190,55" fill="none" stroke="#ff7f0e" stroke-width="2"/>
+      <polyline points="10,35 40,40 70,45 100,50 130,55 160,60 190,65" fill="none" stroke="#2ca02c" stroke-width="2"/>
+      <polyline points="10,60 40,64 70,67 100,70 130,73 160,77 190,80" fill="none" stroke="#1f77b4" stroke-width="2"/>
+      <text x="14" y="18" font-size="8" fill="#ff7f0e">단기</text>
+      <text x="14" y="33" font-size="8" fill="#2ca02c">중기</text>
+      <text x="14" y="78" font-size="8" fill="#1f77b4">장기 (하향)</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 단기 < 중기 < 장기 순으로 SMA 배치되고 장기선이 하향. Cross 없는 약세.</p>
+    <p><strong>신호:</strong> 매도 — 안정적 하락 추세. 데드크로스만큼 강하진 않지만 반등 약함.</p>
+    <p><strong>검출:</strong> last_short < last_mid AND 장기선 기울기 < -임계값 (cross 시그널 없음).</p>
+
+"추세 미확정":
+  signal_typical: 관망
+  svg: |
+    <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+      <polyline points="10,55 30,40 50,65 70,45 90,60 110,50 130,55 150,42 170,58 190,48" fill="none" stroke="#999" stroke-width="2"/>
+      <text x="60" y="92" font-size="9" fill="#666">횡보 / 혼재</text>
+    </svg>
+  description_html: |
+    <p><strong>형성:</strong> 이동평균선이 서로 얽혀 명확한 추세가 없음 (cross 없음 + 기울기 약함).</p>
+    <p><strong>신호:</strong> 관망 — 방향성 부족. 거래량/RSI 등 다른 지표로 보완 필요.</p>

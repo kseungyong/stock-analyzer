@@ -104,9 +104,12 @@ def _compute_summary(
         signal = ma_sig if ma_sig in ("사지마", "팔지마") else "관망"
 
     top_patterns: list[str] = []
-    ma_label = ma_state.get("label", "")
-    if ma_sig in ("매수", "매도") and ma_label:
-        top_patterns.append(ma_label.split(" ")[0])
+    # ma_state.name 우선 사용 (메타데이터 lookup 가능한 명시적 패턴명).
+    # 예전엔 label.split(" ")[0] 으로 첫 단어를 잘라 썼는데 "단기 > 중기..."
+    # 같은 label 의 첫 단어 "단기" 가 패턴명으로 잘못 노출됐음.
+    ma_name = ma_state.get("name") or ma_state.get("label", "").split(" ")[0]
+    if ma_sig in ("매수", "매도") and ma_name:
+        top_patterns.append(ma_name)
     if warning:
         top_patterns.append(warning.get("pattern", ""))
     for cp in chart_patterns[:1]:
