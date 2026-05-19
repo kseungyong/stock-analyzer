@@ -134,9 +134,14 @@ def _evaluate_single(
 
     eps_t = float(trailing_eps) if trailing_eps is not None else None
     eps_f = float(forward_eps) if forward_eps is not None else None
+    rev_g = float(revenue_growth) if revenue_growth is not None else None
+    # cond2: EPS 양수 (1차) → forward > trailing (2차)
+    #      → trailing_eps NULL 이면 revenue_growth > 0 fallback (yfinance가
+    #        한국 종목 EPS 미제공이라 도입; spec §3.2 EPS 양수 의도 대체)
     cond2 = (
         (eps_t is not None and eps_t > 0)
         or (eps_t is not None and eps_f is not None and eps_f > eps_t)
+        or (eps_t is None and rev_g is not None and rev_g > 0)
     )
 
     cond3_score = pe_quintile
