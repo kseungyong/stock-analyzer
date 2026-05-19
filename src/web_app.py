@@ -328,6 +328,8 @@ def _run_full_analysis_bg(job_id: str) -> None:
                     pattern_signal=pat_summary.get("signal"),
                     pattern_score=pat_summary.get("score"),
                     last_close=r.get("last_close"),
+                    rel_perf_json=_json.dumps(r["rel_perf"], ensure_ascii=False)
+                                  if r.get("rel_perf") else None,
                 )
                 cached += 1
             except Exception as e:
