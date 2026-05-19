@@ -118,7 +118,8 @@ def analyze_one(inputs: dict[str, Any]) -> LLMResult:
     model = _get_model()
     gen_cfg = {
         "temperature": 0.3,
-        "max_output_tokens": 1024,
+        # 4 필드 (tam/narrative/bottleneck/moat) × 한국어 200~300자 → ≈4000 토큰
+        "max_output_tokens": 4096,
         "response_mime_type": "application/json",
     }
     last_err: str | None = None
