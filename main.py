@@ -62,6 +62,8 @@ prediction_history.init_db()
 analysis_cache.init_db()
 from src import portfolio as _portfolio_init
 _portfolio_init.init_db()
+from src import composite_history as _composite_history
+_composite_history.init_db()
 
 
 def get_all_stocks(config: dict) -> list[dict]:
@@ -250,6 +252,14 @@ def auto_analyze_market(market: str) -> None:
                 rel_perf_json=_json.dumps(result["rel_perf"], ensure_ascii=False)
                               if result.get("rel_perf") else None,
             )
+            # composite_history 기록 — cleanup 모듈의 7일 연속 판정용
+            try:
+                composite = (float(sig.get("score") or 0)
+                             + float(bnf.get("score") or 0)
+                             + float(pat_summary.get("score") or 0) * 0.5)
+                _composite_history.insert(s["symbol"], composite)
+            except Exception as e:
+                logger.warning("composite_history.insert 실패 (분석은 계속): %s", e)
             success += 1
         except Exception as e:
             logger.exception("자동분석 오류 — %s: %s", s["symbol"], e)
