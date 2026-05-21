@@ -410,6 +410,17 @@ def main():
     subparsers.add_parser("backfill", help="예측 히스토리 backfill (launchd cron 용)")
     subparsers.add_parser("daily-email", help="다이제스트 이메일 발송 (launchd cron 용)")
     subparsers.add_parser("leaders-refresh", help="주도주 발굴 cron (launchd)")
+    cleanup_parser = subparsers.add_parser(
+        "cleanup", help="자동 종목 정리 (composite < -5, 7일 연속)"
+    )
+    cleanup_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="후보만 출력, 변경 없음",
+    )
+    cleanup_parser.add_argument(
+        "--apply", action="store_true",
+        help="실제 settings.yaml 수정 + git commit + push",
+    )
 
     # 기존 옵션
     parser.add_argument("--run-now", action="store_true", help="즉시 분석 실행")
@@ -440,6 +451,43 @@ def main():
 
     if args.command == "leaders-refresh":
         sys.exit(leaders_refresh())
+
+    if args.command == "cleanup":
+        from src import cleanup as _cleanup, composite_history as _ch
+        from src import portfolio as _pf
+
+        if not (args.dry_run or args.apply):
+            print("cleanup: --dry-run 또는 --apply 중 하나 필요")
+            sys.exit(2)
+        if args.dry_run and args.apply:
+            print("cleanup: --dry-run 과 --apply 동시 사용 불가")
+            sys.exit(2)
+
+        # 90일 이전 history 정리
+        purged = _ch.purge_old(days=90)
+        logger.info("composite_history 정리: %d row 삭제", purged)
+
+        # held symbols
+        try:
+            holdings = _pf.list_holdings_with_pnl("default")
+            held = {h["symbol"] for h in holdings}
+        except Exception as e:
+            logger.warning("portfolio 조회 실패 — held 보호 비활성: %s", e)
+            held = set()
+
+        config = load_config()
+        candidates = _cleanup.find_candidates(config, held)
+        logger.info("cleanup 후보: %d 종목", len(candidates))
+
+        log_path = Path(__file__).parent / "logs" / "auto_remove.log"
+        result = _cleanup.apply(
+            candidates,
+            config_path=CONFIG_PATH,
+            log_path=log_path,
+            dry_run=args.dry_run,
+        )
+        logger.info("cleanup 결과: %s", result)
+        return
 
     if args.web:
         from src.web_app import run_web
