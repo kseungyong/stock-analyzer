@@ -62,6 +62,8 @@ prediction_history.init_db()
 analysis_cache.init_db()
 from src import portfolio as _portfolio_init
 _portfolio_init.init_db()
+from src import composite_history as _composite_history
+_composite_history.init_db()
 
 
 def get_all_stocks(config: dict) -> list[dict]:
@@ -250,6 +252,14 @@ def auto_analyze_market(market: str) -> None:
                 rel_perf_json=_json.dumps(result["rel_perf"], ensure_ascii=False)
                               if result.get("rel_perf") else None,
             )
+            # composite_history 기록 — cleanup 모듈의 7일 연속 판정용
+            try:
+                composite = (float(sig.get("score") or 0)
+                             + float(bnf.get("score") or 0)
+                             + float(pat_summary.get("score") or 0) * 0.5)
+                _composite_history.insert(s["symbol"], composite)
+            except Exception as e:
+                logger.warning("composite_history.insert 실패 (분석은 계속): %s", e)
             success += 1
         except Exception as e:
             logger.exception("자동분석 오류 — %s: %s", s["symbol"], e)
@@ -400,6 +410,17 @@ def main():
     subparsers.add_parser("backfill", help="예측 히스토리 backfill (launchd cron 용)")
     subparsers.add_parser("daily-email", help="다이제스트 이메일 발송 (launchd cron 용)")
     subparsers.add_parser("leaders-refresh", help="주도주 발굴 cron (launchd)")
+    cleanup_parser = subparsers.add_parser(
+        "cleanup", help="자동 종목 정리 (composite < -5, 7일 연속)"
+    )
+    cleanup_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="후보만 출력, 변경 없음",
+    )
+    cleanup_parser.add_argument(
+        "--apply", action="store_true",
+        help="실제 settings.yaml 수정 + git commit + push",
+    )
 
     # 기존 옵션
     parser.add_argument("--run-now", action="store_true", help="즉시 분석 실행")
@@ -430,6 +451,51 @@ def main():
 
     if args.command == "leaders-refresh":
         sys.exit(leaders_refresh())
+
+    if args.command == "cleanup":
+        from src import cleanup as _cleanup, composite_history as _ch
+        from src import portfolio as _pf
+
+        if not (args.dry_run or args.apply):
+            print("cleanup: --dry-run 또는 --apply 중 하나 필요")
+            sys.exit(2)
+        if args.dry_run and args.apply:
+            print("cleanup: --dry-run 과 --apply 동시 사용 불가")
+            sys.exit(2)
+
+        # 90일 이전 history 정리
+        purged = _ch.purge_old(days=90)
+        logger.info("composite_history 정리: %d row 삭제", purged)
+
+        # held symbols — 모든 사용자의 보유 종목 합집합 (다중 사용자 안전)
+        try:
+            import sqlite3 as _sqlite3
+            from src.portfolio import _DB_PATH as _PF_DB_PATH
+            held = set()
+            with _sqlite3.connect(_PF_DB_PATH) as _conn:
+                rows = _conn.execute(
+                    "SELECT DISTINCT username FROM portfolio"
+                ).fetchall()
+                for (username,) in rows:
+                    for h in _pf.list_holdings_with_pnl(username):
+                        held.add(h["symbol"])
+        except Exception as e:
+            logger.warning("portfolio 조회 실패 — held 보호 비활성: %s", e)
+            held = set()
+
+        config = load_config()
+        candidates = _cleanup.find_candidates(config, held)
+        logger.info("cleanup 후보: %d 종목", len(candidates))
+
+        log_path = Path(__file__).parent / "logs" / "auto_remove.log"
+        result = _cleanup.apply(
+            candidates,
+            config_path=CONFIG_PATH,
+            log_path=log_path,
+            dry_run=args.dry_run,
+        )
+        logger.info("cleanup 결과: %s", result)
+        return
 
     if args.web:
         from src.web_app import run_web
