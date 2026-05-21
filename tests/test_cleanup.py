@@ -179,3 +179,103 @@ class TestFindCandidates:
         result = cleanup.find_candidates(config, held_symbols=set())
         syms = sorted(c["symbol"] for c in result)
         assert syms == ["BAD.KS", "TRASH"]
+
+
+import subprocess
+from unittest.mock import MagicMock, patch
+
+
+class TestApply:
+    def _make_config_file(self, tmp_path):
+        yaml_path = tmp_path / "settings.yaml"
+        yaml_path.write_text(
+            "stocks:\n"
+            "  korea:\n"
+            "    - name: 좋은주\n"
+            "      symbol: GOOD.KS\n"
+            "    - name: 잡주\n"
+            "      symbol: BAD.KS\n",
+            encoding="utf-8",
+        )
+        return yaml_path
+
+    def test_dry_run_no_file_change(self, tmp_path):
+        yaml_path = self._make_config_file(tmp_path)
+        original = yaml_path.read_text(encoding="utf-8")
+        log_path = tmp_path / "auto_remove.log"
+        candidates = [
+            {"symbol": "BAD.KS", "name": "잡주", "market": "korea",
+             "composite_avg": -6.5, "days": 7},
+        ]
+        result = cleanup.apply(
+            candidates, config_path=yaml_path, log_path=log_path,
+            dry_run=True,
+        )
+        assert result["removed"] == 0
+        assert result["dry_run"] is True
+        assert yaml_path.read_text(encoding="utf-8") == original
+        assert not log_path.exists()
+
+    def test_apply_removes_and_writes_log(self, tmp_path):
+        yaml_path = self._make_config_file(tmp_path)
+        log_path = tmp_path / "auto_remove.log"
+        candidates = [
+            {"symbol": "BAD.KS", "name": "잡주", "market": "korea",
+             "composite_avg": -6.5, "days": 7},
+        ]
+        with patch("src.cleanup._git_commit_push") as mock_git:
+            mock_git.return_value = True
+            result = cleanup.apply(
+                candidates, config_path=yaml_path, log_path=log_path,
+                dry_run=False,
+            )
+        assert result["removed"] == 1
+        assert result["limited"] is False
+        # settings.yaml — BAD.KS 제거 확인
+        import yaml
+        config = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        symbols = [s["symbol"] for s in config["stocks"]["korea"]]
+        assert "GOOD.KS" in symbols
+        assert "BAD.KS" not in symbols
+        # 로그 1줄 추가 확인
+        log_lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(log_lines) == 1
+        assert "BAD.KS" in log_lines[0]
+        assert "잡주" in log_lines[0]
+        # git commit 호출 확인
+        mock_git.assert_called_once()
+
+    def test_safety_limit_aborts(self, tmp_path):
+        yaml_path = self._make_config_file(tmp_path)
+        log_path = tmp_path / "auto_remove.log"
+        original = yaml_path.read_text(encoding="utf-8")
+        # 11 candidates (>10 limit)
+        candidates = [
+            {"symbol": f"X{i}.KS", "name": f"잡주{i}", "market": "korea",
+             "composite_avg": -6.0, "days": 7}
+            for i in range(11)
+        ]
+        with patch("src.cleanup._git_commit_push") as mock_git:
+            result = cleanup.apply(
+                candidates, config_path=yaml_path, log_path=log_path,
+                dry_run=False,
+            )
+        assert result["removed"] == 0
+        assert result["limited"] is True
+        # 파일 변경 없음 + git 호출 없음
+        assert yaml_path.read_text(encoding="utf-8") == original
+        assert not log_path.exists()
+        mock_git.assert_not_called()
+
+    def test_empty_candidates_noop(self, tmp_path):
+        yaml_path = self._make_config_file(tmp_path)
+        log_path = tmp_path / "auto_remove.log"
+        original = yaml_path.read_text(encoding="utf-8")
+        with patch("src.cleanup._git_commit_push") as mock_git:
+            result = cleanup.apply(
+                [], config_path=yaml_path, log_path=log_path, dry_run=False,
+            )
+        assert result["removed"] == 0
+        assert yaml_path.read_text(encoding="utf-8") == original
+        assert not log_path.exists()
+        mock_git.assert_not_called()
