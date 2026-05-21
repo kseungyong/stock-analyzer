@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import yaml
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -154,8 +155,6 @@ def apply(
 
     Returns: {"removed": N, "limited": bool, "dry_run": bool}
     """
-    import yaml
-
     config_path = Path(config_path)
     log_path = Path(log_path)
 

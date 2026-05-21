@@ -467,10 +467,18 @@ def main():
         purged = _ch.purge_old(days=90)
         logger.info("composite_history 정리: %d row 삭제", purged)
 
-        # held symbols
+        # held symbols — 모든 사용자의 보유 종목 합집합 (다중 사용자 안전)
         try:
-            holdings = _pf.list_holdings_with_pnl("default")
-            held = {h["symbol"] for h in holdings}
+            import sqlite3 as _sqlite3
+            from src.portfolio import _DB_PATH as _PF_DB_PATH
+            held = set()
+            with _sqlite3.connect(_PF_DB_PATH) as _conn:
+                rows = _conn.execute(
+                    "SELECT DISTINCT username FROM portfolio"
+                ).fetchall()
+                for (username,) in rows:
+                    for h in _pf.list_holdings_with_pnl(username):
+                        held.add(h["symbol"])
         except Exception as e:
             logger.warning("portfolio 조회 실패 — held 보호 비활성: %s", e)
             held = set()
