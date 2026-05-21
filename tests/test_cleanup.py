@@ -89,3 +89,93 @@ class TestShouldRemove:
             history_rows=self._rows_seven_days(-5.0),
             is_held=False, is_pinned_or_noted=False,
         ) is False
+
+
+import time
+from src import composite_history as ch
+
+
+@pytest.fixture
+def _isolated_history_db(tmp_path, monkeypatch):
+    """find_candidates 가 composite_history.recent 를 호출하므로 격리."""
+    db = tmp_path / "test_predictions.db"
+    monkeypatch.setattr(ch, "_DB_PATH", db)
+    ch.init_db()
+    yield ch
+
+
+class TestFindCandidates:
+    def _seed_history(self, ch_mod, symbol: str, value: float, days: int = 7):
+        now = int(time.time())
+        for i in range(days):
+            ch_mod.insert(symbol, value, recorded_at=now - i * 86400)
+
+    def test_finds_simple_candidate(self, _isolated_history_db):
+        ch_mod = _isolated_history_db
+        self._seed_history(ch_mod, "BAD.KS", -7.0, days=7)
+        config = {
+            "stocks": {"korea": [{"name": "잡주", "symbol": "BAD.KS"}]}
+        }
+        result = cleanup.find_candidates(config, held_symbols=set())
+        assert len(result) == 1
+        assert result[0]["symbol"] == "BAD.KS"
+        assert result[0]["name"] == "잡주"
+        assert result[0]["market"] == "korea"
+        assert result[0]["composite_avg"] == pytest.approx(-7.0)
+        assert result[0]["days"] == 7
+
+    def test_excludes_etf(self, _isolated_history_db):
+        ch_mod = _isolated_history_db
+        self._seed_history(ch_mod, "069500.KS", -7.0, days=7)
+        config = {
+            "stocks": {"korea": [{"name": "KODEX 200", "symbol": "069500.KS"}]}
+        }
+        assert cleanup.find_candidates(config, held_symbols=set()) == []
+
+    def test_excludes_held(self, _isolated_history_db):
+        ch_mod = _isolated_history_db
+        self._seed_history(ch_mod, "BAD.KS", -7.0, days=7)
+        config = {
+            "stocks": {"korea": [{"name": "잡주", "symbol": "BAD.KS"}]}
+        }
+        assert cleanup.find_candidates(config, held_symbols={"BAD.KS"}) == []
+
+    def test_excludes_pinned(self, _isolated_history_db):
+        ch_mod = _isolated_history_db
+        self._seed_history(ch_mod, "BAD.KS", -7.0, days=7)
+        config = {
+            "stocks": {"korea": [
+                {"name": "잡주", "symbol": "BAD.KS", "pinned": True}
+            ]}
+        }
+        assert cleanup.find_candidates(config, held_symbols=set()) == []
+
+    def test_excludes_noted(self, _isolated_history_db):
+        ch_mod = _isolated_history_db
+        self._seed_history(ch_mod, "BAD.KS", -7.0, days=7)
+        config = {
+            "stocks": {"korea": [
+                {"name": "잡주", "symbol": "BAD.KS", "note": "장기 보유 의도"}
+            ]}
+        }
+        assert cleanup.find_candidates(config, held_symbols=set()) == []
+
+    def test_multi_market(self, _isolated_history_db):
+        ch_mod = _isolated_history_db
+        self._seed_history(ch_mod, "BAD.KS", -7.0, days=7)
+        self._seed_history(ch_mod, "TRASH", -8.0, days=7)
+        self._seed_history(ch_mod, "GOOD.KS", 5.0, days=7)
+        config = {
+            "stocks": {
+                "korea": [
+                    {"name": "잡주", "symbol": "BAD.KS"},
+                    {"name": "좋은주", "symbol": "GOOD.KS"},
+                ],
+                "us": [
+                    {"name": "쓰레기", "symbol": "TRASH"},
+                ],
+            }
+        }
+        result = cleanup.find_candidates(config, held_symbols=set())
+        syms = sorted(c["symbol"] for c in result)
+        assert syms == ["BAD.KS", "TRASH"]

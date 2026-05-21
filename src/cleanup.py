@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 
+from src import composite_history
+
 logger = logging.getLogger(__name__)
 
 _ETF_PREFIXES = ("KODEX", "TIGER", "ARIRANG", "KBSTAR", "HANARO")
@@ -50,3 +52,39 @@ def should_remove(
     if len(history_rows) < _MIN_HISTORY_ROWS:
         return False
     return all(composite < _COMPOSITE_THRESHOLD for _, composite in history_rows)
+
+
+def find_candidates(config: dict, held_symbols: set[str]) -> list[dict]:
+    """settings.yaml 의 모든 종목을 검사하여 삭제 후보 list 반환.
+
+    Args:
+        config: yaml.safe_load 된 settings.yaml dict
+        held_symbols: portfolio 보유 종목 symbol set
+
+    Returns:
+        [{"symbol", "name", "market", "composite_avg", "days"}, ...]
+    """
+    candidates = []
+    stocks_by_market = config.get("stocks", {})
+    for market, group in stocks_by_market.items():
+        for stock in group:
+            symbol = stock["symbol"]
+            name = stock["name"]
+            is_held = symbol in held_symbols
+            is_pinned_or_noted = bool(
+                stock.get("pinned") or stock.get("note")
+            )
+            history_rows = composite_history.recent(symbol, days=7)
+            if not should_remove(
+                symbol, name, history_rows, is_held, is_pinned_or_noted,
+            ):
+                continue
+            composites = [c for _, c in history_rows]
+            candidates.append({
+                "symbol": symbol,
+                "name": name,
+                "market": market,
+                "composite_avg": sum(composites) / len(composites),
+                "days": len(history_rows),
+            })
+    return candidates
