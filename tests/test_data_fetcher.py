@@ -157,3 +157,37 @@ class TestFetchMultiple:
             result = fetch_multiple(stocks)
         assert "FAIL" not in result
         assert "AAPL" in result
+
+
+from unittest.mock import patch, MagicMock
+
+
+class TestFetchNewsDispatch:
+    @patch("src.data_fetcher.fetch_news_kr")
+    @patch("src.data_fetcher.yf.Ticker")
+    def test_ks_suffix_dispatches_to_kr(self, mock_ticker, mock_kr):
+        mock_kr.return_value = [{"title": "테스트"}]
+        from src.data_fetcher import fetch_news
+        result = fetch_news("005930.KS")
+        mock_kr.assert_called_once_with("005930.KS", max_items=10)
+        mock_ticker.assert_not_called()
+        assert result == [{"title": "테스트"}]
+
+    @patch("src.data_fetcher.fetch_news_kr")
+    @patch("src.data_fetcher.yf.Ticker")
+    def test_kq_suffix_dispatches_to_kr(self, mock_ticker, mock_kr):
+        mock_kr.return_value = []
+        from src.data_fetcher import fetch_news
+        fetch_news("247540.KQ")
+        mock_kr.assert_called_once_with("247540.KQ", max_items=10)
+        mock_ticker.assert_not_called()
+
+    @patch("src.data_fetcher.fetch_news_kr")
+    @patch("src.data_fetcher.yf.Ticker")
+    def test_us_symbol_dispatches_to_yfinance(self, mock_ticker, mock_kr):
+        # yfinance ticker.news returns yfinance shape
+        mock_ticker.return_value.news = []
+        from src.data_fetcher import fetch_news
+        fetch_news("AAPL")
+        mock_ticker.assert_called_once_with("AAPL")
+        mock_kr.assert_not_called()

@@ -9,78 +9,87 @@ import pytest
 from src import news_kr
 
 
-_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "naver_news_sample.html"
-
-
 class TestScrapeNaverFinance:
-    def _fixture_html(self) -> str:
-        return _FIXTURE_PATH.read_text(encoding="utf-8")
+    def _fixture_json(self):
+        import json
+        path = Path(__file__).parent / "fixtures" / "naver_news_sample.json"
+        return json.loads(path.read_text(encoding="utf-8"))
 
     @patch("src.news_kr.requests.get")
-    def test_parses_fixture_html(self, mock_get):
-        mock_get.return_value = MagicMock(
-            status_code=200, text=self._fixture_html(),
-        )
+    def test_parses_fixture_json(self, mock_get):
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = self._fixture_json()
+        mock_get.return_value = mock_resp
+
         items = news_kr._scrape_naver_finance("005930")
         assert items is not None
         assert len(items) == 5
         first = items[0]
-        assert first["title"] == "삼성전자, 2분기 호실적 발표"
+        assert first["title"] == "삼성전자, 2분기 호실적 발표"  # titleFull preferred
         assert first["publisher"] == "한국경제"
         assert first["published"] == "2026-05-22 14:23"
+        assert first["link"].startswith("https://n.news.naver.com/mnews/article/")
 
     @patch("src.news_kr.requests.get")
-    def test_relative_url_absolutized(self, mock_get):
-        mock_get.return_value = MagicMock(
-            status_code=200, text=self._fixture_html(),
-        )
+    def test_summary_populated_from_body(self, mock_get):
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = self._fixture_json()
+        mock_get.return_value = mock_resp
+
         items = news_kr._scrape_naver_finance("005930")
-        # First item has relative href "/item/news_read.naver?..."
-        assert items[0]["link"].startswith("https://finance.naver.com/item/news_read.naver?")
-        # Fourth item had absolute URL — preserved
-        assert items[3]["link"].startswith("https://finance.naver.com/item/news_read.naver?")
+        # Mobile API 가 body 제공 — summary 채워짐
+        assert items[0]["summary"]
+        assert items[0]["summary_en"] == ""  # translation still pending
 
     @patch("src.news_kr.requests.get")
-    def test_summary_always_empty(self, mock_get):
-        mock_get.return_value = MagicMock(
-            status_code=200, text=self._fixture_html(),
-        )
+    def test_link_fallback_when_mobileNewsUrl_absent(self, mock_get):
+        # mobileNewsUrl 없으면 office_id + article_id 로 구성
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = [
+            {"total": 1, "items": [{
+                "officeId": "023", "articleId": "0003978030",
+                "officeName": "한국경제", "datetime": "202605221423",
+                "title": "test", "titleFull": "test full", "body": "",
+                # no mobileNewsUrl
+            }]},
+        ]
+        mock_get.return_value = mock_resp
+
         items = news_kr._scrape_naver_finance("005930")
-        for item in items:
-            assert item["summary"] == ""
-            assert item["summary_en"] == ""
+        assert items[0]["link"] == "https://n.news.naver.com/mnews/article/023/0003978030"
 
     @patch("src.news_kr.requests.get")
     def test_http_failure_returns_none(self, mock_get):
         mock_get.side_effect = Exception("network down")
-        result = news_kr._scrape_naver_finance("005930")
-        assert result is None
-
-    @patch("src.news_kr.requests.get")
-    def test_no_table_returns_none(self, mock_get):
-        # HTML 구조 변경 — table.type5 없음
-        mock_get.return_value = MagicMock(
-            status_code=200, text="<html><body><p>Not found</p></body></html>",
-        )
-        result = news_kr._scrape_naver_finance("005930")
-        assert result is None
-
-    @patch("src.news_kr.requests.get")
-    def test_empty_tbody_returns_empty_list(self, mock_get):
-        # table 있고 tr 없음 — 성공 (뉴스 0건)
-        mock_get.return_value = MagicMock(
-            status_code=200,
-            text='<html><body><table class="type5"><tbody></tbody></table></body></html>',
-        )
-        result = news_kr._scrape_naver_finance("005930")
-        assert result == []
+        assert news_kr._scrape_naver_finance("005930") is None
 
     @patch("src.news_kr.requests.get")
     def test_non_200_status_returns_none(self, mock_get):
-        # 404 / 429 등 비정상 HTTP status → None (실패)
-        mock_get.return_value = MagicMock(status_code=404, text="Not Found")
-        result = news_kr._scrape_naver_finance("005930")
-        assert result is None
+        mock_get.return_value = MagicMock(status_code=404)
+        assert news_kr._scrape_naver_finance("005930") is None
+
+    @patch("src.news_kr.requests.get")
+    def test_invalid_json_returns_none(self, mock_get):
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.side_effect = ValueError("invalid json")
+        mock_get.return_value = mock_resp
+        assert news_kr._scrape_naver_finance("005930") is None
+
+    @patch("src.news_kr.requests.get")
+    def test_non_list_response_returns_none(self, mock_get):
+        # 정상 JSON 이지만 list 아님 (구조 변경)
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {"error": "not implemented"}
+        mock_get.return_value = mock_resp
+        assert news_kr._scrape_naver_finance("005930") is None
+
+    @patch("src.news_kr.requests.get")
+    def test_empty_groups_returns_empty_list(self, mock_get):
+        # JSON list 비어있음 — 성공 (뉴스 0건)
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = []
+        mock_get.return_value = mock_resp
+        assert news_kr._scrape_naver_finance("005930") == []
 
 
 @pytest.fixture

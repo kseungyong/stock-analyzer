@@ -10,15 +10,12 @@ import logging
 import os
 import time
 from pathlib import Path
-from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-_NAVER_BASE = "https://finance.naver.com"
-_NAVER_NEWS_URL = _NAVER_BASE + "/item/news_news.naver?code={code}&page=1"
+_NAVER_NEWS_API = "https://m.stock.naver.com/api/news/stock/{code}"
 _HTTP_TIMEOUT = 10
 _HEADERS = {
     "User-Agent": (
@@ -31,13 +28,13 @@ _HEADERS = {
 
 
 def _scrape_naver_finance(krx_code: str) -> list[dict] | None:
-    """Naver Finance 종목 뉴스 list 페이지 크롤링.
+    """Naver Mobile API 로 종목 뉴스 조회.
 
     Returns:
         list of dict — 성공 (뉴스 0건이면 빈 list)
-        None — HTTP 실패 또는 HTML 구조 변경 (parse 실패)
+        None — HTTP 실패 또는 JSON 형식 변경 (parse 실패)
     """
-    url = _NAVER_NEWS_URL.format(code=krx_code)
+    url = _NAVER_NEWS_API.format(code=krx_code)
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_HTTP_TIMEOUT)
     except Exception as e:
@@ -48,42 +45,50 @@ def _scrape_naver_finance(krx_code: str) -> list[dict] | None:
         logger.warning("Naver HTTP %d [%s]", resp.status_code, krx_code)
         return None
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-    table = soup.find("table", class_="type5")
-    if table is None:
-        logger.warning("Naver HTML 구조 변경 감지 [%s] — table.type5 없음", krx_code)
+    try:
+        groups = resp.json()
+    except ValueError as e:
+        logger.warning("Naver JSON parse 실패 [%s]: %s", krx_code, e)
         return None
 
-    tbody = table.find("tbody")
-    if tbody is None:
-        logger.warning("Naver HTML 구조 변경 감지 [%s] — tbody 없음", krx_code)
+    if not isinstance(groups, list):
+        logger.warning("Naver JSON 구조 변경 감지 [%s] — list 아님", krx_code)
         return None
 
     items: list[dict] = []
-    for tr in tbody.find_all("tr"):
-        a = tr.find("td", class_="title")
-        info = tr.find("td", class_="info")
-        date = tr.find("td", class_="date")
-        if a is None or info is None or date is None:
+    for group in groups:
+        if not isinstance(group, dict):
             continue
-        link_tag = a.find("a")
-        if link_tag is None:
-            continue
-        title = link_tag.get_text(strip=True)
-        href = link_tag.get("href", "")
-        link = urljoin(_NAVER_BASE, href)
-        publisher = info.get_text(strip=True)
-        # "2026.05.22 14:23" → "2026-05-22 14:23"
-        published = date.get_text(strip=True).replace(".", "-", 2)
-        items.append({
-            "title": title,
-            "title_en": "",       # Task 3 에서 채움
-            "link": link,
-            "publisher": publisher,
-            "published": published,
-            "summary": "",
-            "summary_en": "",
-        })
+        for raw in (group.get("items") or []):
+            if not isinstance(raw, dict):
+                continue
+            title = (raw.get("titleFull") or raw.get("title") or "").strip()
+            if not title:
+                continue
+            body = (raw.get("body") or "").strip()
+            if len(body) > 200:
+                body = body[:200].rsplit(" ", 1)[0] + "..."
+            office = raw.get("officeName", "")
+            office_id = raw.get("officeId", "")
+            article_id = raw.get("articleId", "")
+            link = raw.get("mobileNewsUrl") or (
+                f"https://n.news.naver.com/mnews/article/{office_id}/{article_id}"
+                if office_id and article_id else ""
+            )
+            dt = raw.get("datetime", "")
+            published = (
+                f"{dt[0:4]}-{dt[4:6]}-{dt[6:8]} {dt[8:10]}:{dt[10:12]}"
+                if isinstance(dt, str) and len(dt) >= 12 else ""
+            )
+            items.append({
+                "title": title,
+                "title_en": "",
+                "link": link,
+                "publisher": office,
+                "published": published,
+                "summary": body,         # Mobile API 가 body 제공
+                "summary_en": "",
+            })
     return items
 
 

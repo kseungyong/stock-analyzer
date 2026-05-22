@@ -1,0 +1,87 @@
+[
+  {
+    "total": 1,
+    "items": [
+      {
+        "id": "0230003978030",
+        "officeId": "023",
+        "articleId": "0003978030",
+        "officeName": "한국경제",
+        "datetime": "202605221423",
+        "type": 1,
+        "title": "삼성전자, 2분기 호실적",
+        "titleFull": "삼성전자, 2분기 호실적 발표",
+        "body": "삼성전자가 2분기 매출 80조원 영업이익 12조원을 기록하며 시장 기대치를 상회했다.",
+        "mobileNewsUrl": "https://n.news.naver.com/mnews/article/023/0003978030"
+      }
+    ]
+  },
+  {
+    "total": 1,
+    "items": [
+      {
+        "id": "0180000001234",
+        "officeId": "018",
+        "articleId": "0000001234",
+        "officeName": "매일경제",
+        "datetime": "202605221310",
+        "type": 1,
+        "title": "삼성전자 상한가 임박",
+        "titleFull": "삼성전자 상한가 임박... AI 반도체 수요 폭발",
+        "body": "AI 반도체 수요 폭발로 삼성전자 주가가 상한가를 향해 치솟고 있다.",
+        "mobileNewsUrl": "https://n.news.naver.com/mnews/article/018/0000001234"
+      }
+    ]
+  },
+  {
+    "total": 1,
+    "items": [
+      {
+        "id": "0150000001235",
+        "officeId": "015",
+        "articleId": "0000001235",
+        "officeName": "서울경제",
+        "datetime": "202605221145",
+        "type": 1,
+        "title": "외국인 순매수 5거래일",
+        "titleFull": "삼성전자 외국인 순매수 5거래일 연속",
+        "body": "외국인 투자자가 삼성전자 주식을 5거래일 연속 순매수했다.",
+        "mobileNewsUrl": "https://n.news.naver.com/mnews/article/015/0000001235"
+      }
+    ]
+  },
+  {
+    "total": 1,
+    "items": [
+      {
+        "id": "0030000001236",
+        "officeId": "003",
+        "articleId": "0000001236",
+        "officeName": "연합뉴스",
+        "datetime": "202605221030",
+        "type": 1,
+        "title": "삼성전자 신고가 경신",
+        "titleFull": "삼성전자 신고가 경신... 메모리 슈퍼사이클 재개",
+        "body": "메모리 슈퍼사이클 재개로 삼성전자가 신고가를 경신했다.",
+        "mobileNewsUrl": "https://n.news.naver.com/mnews/article/003/0000001236"
+      }
+    ]
+  },
+  {
+    "total": 1,
+    "items": [
+      {
+        "id": "4210000001237",
+        "officeId": "421",
+        "articleId": "0000001237",
+        "officeName": "뉴스1",
+        "datetime": "202605220915",
+        "type": 1,
+        "title": "텍사스 공장 가동률 90%",
+        "titleFull": "삼성전자 미국 텍사스 공장 가동률 90%",
+        "body": "삼성전자 텍사스 테일러시 신규 파운드리 공장 가동률이 90%에 도달했다.",
+        "mobileNewsUrl": "https://n.news.naver.com/mnews/article/421/0000001237"
+      }
+    ]
+  }
+]
