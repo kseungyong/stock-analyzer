@@ -126,3 +126,54 @@ def _cache_put(symbol: str, items: list[dict]) -> None:
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
     os.replace(tmp_path, path)
+
+
+import random  # noqa: E402  (module-level appended after initial imports)
+
+_KR_FINANCE_GLOSSARY = {
+    "상한가": "Upper limit (+30%)",
+    "하한가": "Lower limit (-30%)",
+    "어닝 쇼크": "earnings miss",
+    "어닝 서프라이즈": "earnings beat",
+    "신고가": "new high",
+    "신저가": "new low",
+    "급등": "surge",
+    "급락": "plunge",
+    "감자": "capital reduction",
+    "증자": "capital increase",
+}
+
+_TRANSLATE_SLEEP = 0.3
+_TRANSLATE_BACKOFF = 10
+
+
+def _preprocess_kr(text: str) -> str:
+    """번역 직전 한국 금융 은어를 영어 표현으로 치환."""
+    for kr, en in _KR_FINANCE_GLOSSARY.items():
+        text = text.replace(kr, en)
+    return text
+
+
+def _translate_ko_to_en(text: str) -> str:
+    """data_fetcher 의 cached translator 로 위임."""
+    from src.data_fetcher import _translate_ko_to_en_cached
+    return _translate_ko_to_en_cached(text)
+
+
+def _translate_with_backoff(text: str) -> str:
+    """번역 실패 시 한국어 원본 반환. 429/rate-limit 검출 시 backoff sleep."""
+    if not text:
+        return text
+    preprocessed = _preprocess_kr(text)
+    try:
+        return _translate_ko_to_en(preprocessed)
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "rate" in msg.lower() or "too many" in msg.lower():
+            logger.warning(
+                "번역 429/rate-limit — %ds backoff 후 fallback", _TRANSLATE_BACKOFF,
+            )
+            time.sleep(_TRANSLATE_BACKOFF)
+        else:
+            logger.warning("번역 실패 (한국어 원본 유지): %s", e)
+        return text

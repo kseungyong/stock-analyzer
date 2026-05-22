@@ -16,6 +16,13 @@ from deep_translator import GoogleTranslator
 logger = logging.getLogger(__name__)
 
 _translator = GoogleTranslator(source="en", target="ko")
+_translator_ko_en = GoogleTranslator(source="ko", target="en")
+
+
+@lru_cache(maxsize=512)
+def _translate_ko_to_en_cached(text: str) -> str:
+    """한국어 → 영어 번역. 결과 캐싱."""
+    return _translator_ko_en.translate(text)
 
 
 def _is_english(text: str) -> bool:

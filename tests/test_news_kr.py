@@ -127,3 +127,45 @@ class TestCache:
         """빈 list 도 정상 캐시 + 조회 가능 (성공+0건 시나리오)."""
         news_kr._cache_put("BORING.KS", [])
         assert news_kr._cache_get("BORING.KS") == []
+
+
+class TestPreprocessKR:
+    def test_replaces_glossary_terms(self):
+        result = news_kr._preprocess_kr("삼성전자 상한가 임박")
+        assert "Upper limit" in result
+        assert "상한가" not in result
+
+    def test_passthrough_no_match(self):
+        result = news_kr._preprocess_kr("삼성전자 2분기 호실적")
+        # 일반 헤드라인은 그대로
+        assert result == "삼성전자 2분기 호실적"
+
+
+class TestTranslateWithBackoff:
+    def test_returns_translated_text_on_success(self, monkeypatch):
+        monkeypatch.setattr(
+            news_kr, "_translate_ko_to_en",
+            lambda t: t.replace("삼성전자", "Samsung Electronics"),
+        )
+        result = news_kr._translate_with_backoff("삼성전자 호실적")
+        assert "Samsung Electronics" in result
+
+    def test_returns_original_on_failure(self, monkeypatch):
+        def boom(text):
+            raise Exception("network down")
+        monkeypatch.setattr(news_kr, "_translate_ko_to_en", boom)
+        result = news_kr._translate_with_backoff("삼성전자 호실적")
+        assert result == "삼성전자 호실적"  # fallback to original
+
+    def test_429_triggers_backoff_sleep(self, monkeypatch):
+        """429/rate-limit 검출 시 _TRANSLATE_BACKOFF 만큼 sleep + 한국어 fallback."""
+        def rate_limited(text):
+            raise Exception("429 too many requests")
+        monkeypatch.setattr(news_kr, "_translate_ko_to_en", rate_limited)
+        sleep_calls = []
+        monkeypatch.setattr(news_kr.time, "sleep", lambda s: sleep_calls.append(s))
+
+        result = news_kr._translate_with_backoff("삼성전자 호실적")
+
+        assert result == "삼성전자 호실적"  # fallback to Korean
+        assert news_kr._TRANSLATE_BACKOFF in sleep_calls
