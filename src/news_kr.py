@@ -5,7 +5,11 @@ data_fetcher.fetch_news 가 symbol suffix 로 dispatch.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import time
+from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
@@ -81,3 +85,44 @@ def _scrape_naver_finance(krx_code: str) -> list[dict] | None:
             "summary_en": "",
         })
     return items
+
+
+_CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "news_cache"
+_NEWS_CACHE_TTL = 3600  # 1h
+
+
+def _cache_path(symbol: str) -> Path:
+    return _CACHE_DIR / f"{symbol}.json"
+
+
+def _cache_get(symbol: str) -> list[dict] | None:
+    """캐시 hit 이면 items list, miss/만료/corrupt 이면 None.
+    빈 list 도 정상 캐시 hit (성공+0건 시나리오)."""
+    path = _cache_path(symbol)
+    try:
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    fetched_at = payload.get("fetched_at", 0)
+    if time.time() - fetched_at > _NEWS_CACHE_TTL:
+        return None
+    return payload.get("items", [])
+
+
+def _cache_put(symbol: str, items: list[dict]) -> None:
+    """atomic write: .tmp → os.replace → .json.
+    호출자는 scrape 실패(None) 시 이 함수를 호출하지 않아야 한다 (Task 4 fetch_news_kr 책임)."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_path(symbol)
+    tmp_path = path.with_suffix(".tmp")
+    payload = {
+        "fetched_at": int(time.time()),
+        "symbol": symbol,
+        "items": items,
+    }
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    os.replace(tmp_path, path)

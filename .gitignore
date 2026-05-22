@@ -12,3 +12,4 @@ logs/*
 /data/
 .worktrees/
 .superpowers/
+data/news_cache/
