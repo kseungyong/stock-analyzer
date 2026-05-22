@@ -6,9 +6,21 @@
 
 ---
 
+## 0. 사전 준비 (구현 시작 전)
+
+1. **DART_API_KEY 이미 보유** ✅ (사용자 확인) — `.env` 에 `DART_API_KEY=...` 추가 (로컬) + macmini `~/Library/LaunchAgents/ai.stock-analyzer.dart-refresh.plist` 의 `EnvironmentVariables` 에도 등록 (cron)
+2. **GEMINI_API_KEY** 는 leader_filter 이미 사용 중이라 추가 작업 없음
+3. **출처 표기 의무**: DART OpenAPI ToS 에 따라 카드 footer 에 "출처: DART (금감원 전자공시)" 표기
+
 ## 1. 목적
 
-한국 종목 분석 카드에 **"공시정보분석"** 섹션 추가. DART (전자공시시스템) 의 주요사항보고서(DS005) + 지분공시(DS004) 를 매일 1회 일괄 fetch → critical event 가 있는 종목만 Gemini LLM 으로 요약 → 카드 하단에 매매 관점 해석 표시.
+한국 종목 분석 카드에 **"공시정보분석"** 섹션 추가. DART (전자공시시스템) 의 주요사항보고서(DS005) + 지분공시(DS004) 를 매일 1회 일괄 fetch → critical event 가 있는 종목만 분석 → 카드 하단에 매매 관점 해석 표시.
+
+**요약 전략 (Hybrid)**:
+- 단일 critical event → 규칙 기반 template (LLM skip, 0 호출)
+- 2개 이상 critical event → Gemini LLM 종합 해석 (월 ~30 호출)
+
+이 전략으로 LLM 호출 65/일 → 평균 1~3/일 로 95%+ 감소, 환각 위험 + 비용 + Gemini quota 부담 동시 해결.
 
 성공 조건:
 - 자기주식 취득 결정/유상증자/대량보유 신고 등 즉시 영향 큰 공시 자동 감지
@@ -26,24 +38,30 @@
 ```
 신규:
   src/dart_client.py    — DART API HTTP wrapper + corp_code 매핑
-  src/dart_cache.py     — disclosures + corp_codes 테이블 (DB layer)
-  src/dart_llm.py       — Gemini 요약 (leader_llm 패턴 재사용)
+  src/dart_rules.py     — critical event 분류 + 규칙 기반 template (hybrid 단일 case)
+  src/dart_cache.py     — disclosures + corp_codes + dart_summaries 테이블 (DB layer)
+  src/dart_llm.py       — Gemini 요약 (hybrid 복수 case 전용)
+  src/log_filter.py     — SecretFilter (DART_API_KEY redaction)
 
 수정:
-  src/analysis_cache.py — dart_summary_json TEXT 컬럼 마이그레이션 + get/put/list 반환에 포함
   src/report_generator.py — _render_dart_section() + _render_stock_card 호출
-  src/web_app.py        — home/portfolio 카드 배지 (공시 sentiment)
+  src/web_app.py        — home/portfolio 카드 배지 (공시 sentiment) + dart_summaries JOIN
   src/templates/report.css — .dart-section 스타일
   main.py               — dart-refresh subcommand + 모듈 로드 시점 init_db
 
 신규 cron:
-  ~/Library/LaunchAgents/ai.stock-analyzer.dart-refresh.plist  (macmini, KST 18:00)
+  ~/Library/LaunchAgents/ai.stock-analyzer.dart-refresh.plist  (macmini, KST 19:30)
+  → 18:00 → **19:30 변경** (DS005 주요사항보고서는 KST 18:00~19:00 집중 접수,
+     19:30 이면 그날 공시 99% 수집 가능)
 
 DB (data/predictions.db):
   corp_codes              (corp_code, corp_name, stock_code, modify_date)
   disclosures             (id, corp_code, stock_code, disclosure_type, rcept_no, rcept_dt, raw_json, fetched_at)
-  analysis_cache.dart_summary_json (TEXT, nullable)
+  dart_summaries          (symbol PRIMARY KEY, summary_json, sentiment, critical_count, generated_at, model)
+                          ← analysis_cache 와 분리. race condition 회피.
 ```
+
+**analysis_cache 미수정** — dart_summaries 별도 테이블로 책임 분리. report_generator/web_app 이 LEFT JOIN (또는 별도 lookup) 으로 합성.
 
 신규 의존성 0개 (`requests`, `google.generativeai` 모두 기존 사용 중).
 
@@ -61,9 +79,9 @@ GET https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={KEY}
 ```
 
 다운로드 정책:
-- **월 1회** 자동 갱신 (마지막 modify_date 가 30일 이전이면 재다운로드)
+- **주 1회 (7일 stale)** 자동 갱신 — 신규 상장 종목의 IPO 1주 차 공시 누락 방지
 - ZIP 다운로드 실패 시 → warn + 기존 테이블 그대로 사용
-- 신규 상장 종목이 corp_codes 에 없으면 → skip + warn (다음 월에 갱신)
+- 신규 상장 종목이 corp_codes 에 없으면 → **즉시 corp_codes 재다운로드 트리거** (ZIP ~5MB 라 비용 부담 없음) + 그래도 없으면 skip + warn
 
 ### 3.2 Phase A 사용 endpoint (9개)
 
@@ -91,105 +109,180 @@ GET https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={KEY}
 - DS005/DS004: 최근 **30일** (`bgn_de`/`end_de` 파라미터)
 - 30일 이내 critical event 없으면 → LLM skip (cost 절감)
 
-## 4. critical event 판정
+## 4. critical event 판정 + 임계치
 
-`src/dart_client.py:has_critical_events(disclosures: dict) -> bool`:
+`src/dart_rules.py:classify_disclosures(disclosures: dict) -> dict`:
 
 ```python
-def has_critical_events(disclosures: dict) -> bool:
-    critical_keys = (
-        "capital_increase", "capital_decrease",
-        "treasury_acquire", "treasury_dispose",
-        "merger", "major_holders", "exec_holders",
-    )
-    return any(disclosures.get(k) for k in critical_keys)
+def classify_disclosures(disclosures: dict) -> dict:
+    """critical event 분류 + tier 결정.
+
+    Returns:
+        {
+            "critical_events": [{"type": str, "tier": "high"|"medium", "raw": dict}, ...],
+            "count": int,
+            "should_call_llm": bool,   # 2개 이상이면 True (hybrid)
+        }
+    """
 ```
 
-DS001 list 만 있고 다른 critical 카테고리 0건 → LLM skip + dart_summary_json = `{"empty": true}` (UI에서 "최근 30일 critical 공시 없음" 표시).
+**tier 1 (high) — 임계치 없이 무조건 critical**:
+- `capital_increase` (유상증자), `capital_decrease` (감자)
+- `treasury_acquire`, `treasury_dispose`
+- `merger`
 
-## 5. LLM 요약 (Gemini)
+**tier 2 (medium) — 임계치 적용**:
+- `major_holders` (대량보유): **변동 비율 >= 0.5%p AND 보유 비율 >= 5%**
+- `exec_holders` (임원/주요주주): **금액 >= 1억원 OR 변동 주식수 >= 1000주**
 
-`src/dart_llm.py:summarize_disclosures(symbol, name, disclosures) -> dict | None`:
+→ 노이즈 (임원 1주 매수 등) 차단.
 
-**모델**: `gemini-2.5-flash` (leader_llm 동일).
+**Hybrid 전략**:
+- `count == 0` → LLM skip, `dart_summaries.summary_json = {"empty": true}` 저장
+- `count == 1` → 규칙 기반 template (dart_rules.render_template), LLM skip
+- `count >= 2` → Gemini LLM 호출 (복잡 종합 해석 필요)
 
-**프롬프트**:
+**규칙 기반 template 예시** (`dart_rules.render_template`):
+- `treasury_acquire(200억원)` → `{"summary": "자기주식 200억원 취득 결정 — 주주환원 시그널", "sentiment": "긍정", "key_events": ["자기주식 취득 200억원"], "trading_view": "매수 — 자사주 매입은 EPS 상승 + 회사 자신감 표명"}`
+- `capital_increase(1000억원)` → `{"summary": "유상증자 1000억원 결정 — 신주 발행에 따른 희석", "sentiment": "부정", "key_events": ["유상증자 1000억원"], "trading_view": "매도 — 기존 주주 지분 희석 예상"}`
+
+## 5. LLM 요약 (Gemini, hybrid 복수 case 전용)
+
+`src/dart_llm.py:summarize_disclosures(symbol, name, classified: dict) -> dict | None`:
+
+**호출 조건**: `classified["should_call_llm"] is True` (count >= 2). 단일 critical 은 dart_rules.render_template 사용.
+
+**모델**: `gemini-2.5-flash` (leader_filter 동일).
+
+**프롬프트** — 환각 방지 위해 사실 인용 규칙 추가:
 ```
 당신은 한국 주식 시장의 공시 분석 전문가입니다.
 종목: {name} ({symbol})
 
-최근 30일 주요 공시:
-{disclosures_json}
+최근 30일 주요 공시 (분류된 critical events):
+{critical_events_json}
 
-다음 JSON 형식으로만 응답:
+다음 규칙을 엄격히 지켜:
+1. key_events 의 각 항목은 반드시 입력 disclosures 에 있는 rcept_no (접수번호) 를 인용. rcept_no 없으면 출력 금지.
+2. sentiment 는 "긍정" / "부정" / "중립" 중 하나만 (정확한 enum).
+3. trading_view 는 "매수" / "매도" / "관망" 중 하나로 시작하고, " — " 다음에 1줄 근거.
+
+응답은 아래 JSON 형식만:
 {
-  "summary": "2-3문장 핵심 요약",
+  "summary": "2-3문장 종합 해석 (여러 공시의 상호 영향)",
   "sentiment": "긍정" | "부정" | "중립",
-  "key_events": ["가장 중요한 이벤트 1-3개"],
-  "trading_view": "매수/매도/관망 + 1줄 근거"
+  "key_events": ["[rcept_no] 사실 인용 1", "[rcept_no] 사실 인용 2"],
+  "trading_view": "매수|매도|관망 — 1줄 근거"
 }
 ```
 
 **generation_config**:
 - `temperature: 0.3`
-- `max_output_tokens: 2048` (4 필드 한국어 충분, kr-news leader_llm 의 4096 보다 작음)
+- `max_output_tokens: 1024` (3-4 필드 한국어 충분, 2048 → 1024 축소)
 - `response_mime_type: "application/json"`
 
-**반환 형식**:
+**반환 형식 + 검증**:
 ```python
 {
     "summary": str,
-    "sentiment": "긍정" | "부정" | "중립",
+    "sentiment": "긍정" | "부정" | "중립",   # 다른 값이면 fallback
     "key_events": list[str],
     "trading_view": str,
     "model": "gemini-2.5-flash",
-    "generated_at": int,        # unix timestamp
+    "generated_at": int,
 }
 ```
 
+호출 후 검증:
+- `sentiment in ("긍정", "부정", "중립")` 아니면 → `sentiment = "중립"` + warn
+- `trading_view` 가 `매수|매도|관망` 으로 시작 안 하면 → `"관망 — LLM 응답 형식 오류"` fallback
+
 **실패 처리**:
-- API timeout/error → `None` 반환 → caller 가 dart_summary_json = NULL 저장
-- JSON parse 실패 → `{"summary": <raw_text>, "sentiment": "중립", "key_events": [], "trading_view": "관망 (LLM 응답 형식 오류)"}` fallback
+- API timeout/error → `None` 반환 → caller 가 dart_summaries row 미갱신 (이전 값 유지)
+- JSON parse 실패 → fallback dict (raw text + neutral sentiment + "관망")
 
-## 6. 캐시 (analysis_cache)
+## 6. 캐시 (별도 dart_summaries 테이블)
 
-### 6.1 컬럼 추가
+### 6.1 신규 테이블
 
 ```sql
-ALTER TABLE analysis_cache ADD COLUMN dart_summary_json TEXT
+CREATE TABLE IF NOT EXISTS dart_summaries (
+    symbol           TEXT PRIMARY KEY,
+    summary_json     TEXT NOT NULL,      -- {"summary","sentiment","key_events","trading_view"} 또는 {"empty":true}
+    sentiment        TEXT,                -- 긍정/부정/중립/empty (배지용 quick access)
+    critical_count   INTEGER NOT NULL,
+    generated_at     INTEGER NOT NULL,
+    model            TEXT,                -- "gemini-2.5-flash" 또는 "rule_based"
+    source           TEXT NOT NULL        -- "llm" / "rule" / "empty"
+);
 ```
 
-멱등 마이그레이션 (`PRAGMA table_info` 후 조건부 ALTER).
+`analysis_cache` **무수정** — race condition + 책임 혼합 회피.
 
-### 6.2 put/get/list 통합
+### 6.2 dart_cache 인터페이스
 
-`src/analysis_cache.py`:
-- `put(..., dart_summary_json: str | None = None)` — 새 인자
-- `get(symbol)` SELECT 에 `dart_summary_json` 추가, dict 반환에 포함
-- `list_symbols()` SELECT 에 추가, dict 반환에 포함
+`src/dart_cache.py`:
+- `init_db()` — 멱등 schema 적용
+- `upsert_summary(symbol, summary, sentiment, critical_count, model, source)` — `INSERT ... ON CONFLICT(symbol) DO UPDATE SET ...` atomic
+- `get_summary(symbol) -> dict | None`
+- `list_summaries() -> dict[symbol, dict]` — web/report 가 한 번에 fetch
 
-### 6.3 dart-refresh 의 UPDATE 흐름
+### 6.3 dart-refresh 의 atomic batch 흐름
 
 ```python
+# 1. 모든 종목 fetch + classify (메모리에 누적, DB write 0)
+results = []
 for stock in settings.stocks.korea:
     corp_code = dart_client.get_corp_code(stock["symbol"])
     if not corp_code:
         continue
     disclosures = dart_client.fetch_disclosures(corp_code, days=30)
-    dart_cache.insert_raw(disclosures)
-    if dart_client.has_critical_events(disclosures):
-        summary = dart_llm.summarize_disclosures(stock["symbol"], stock["name"], disclosures)
-    else:
+    dart_cache.insert_disclosures(stock["symbol"], corp_code, disclosures)  # raw 저장
+    classified = dart_rules.classify_disclosures(disclosures)
+    results.append((stock, classified))
+
+# 2. summary 생성 (rule or LLM)
+final_summaries = []
+for stock, classified in results:
+    if classified["count"] == 0:
         summary = {"empty": True, "generated_at": int(time.time())}
-    if summary is not None:
-        # analysis_cache row UPSERT — 기존 row 의 다른 필드는 보존
-        _update_dart_summary_only(stock["symbol"], json.dumps(summary, ensure_ascii=False))
+        source = "empty"
+    elif classified["count"] == 1:
+        summary = dart_rules.render_template(classified["critical_events"][0])
+        source = "rule"
+    else:
+        summary = dart_llm.summarize_disclosures(stock["symbol"], stock["name"], classified)
+        if summary is None:
+            continue  # LLM 실패 — 이전 값 유지
+        source = "llm"
+    final_summaries.append((stock["symbol"], summary, source))
+
+# 3. atomic batch commit
+with dart_cache.transaction():
+    for symbol, summary, source in final_summaries:
+        dart_cache.upsert_summary(
+            symbol=symbol,
+            summary=json.dumps(summary, ensure_ascii=False),
+            sentiment=summary.get("sentiment", "empty"),
+            critical_count=...,
+            model=summary.get("model"),
+            source=source,
+        )
 ```
 
-신규 helper `analysis_cache.update_dart_summary(cache_key, dart_summary_json)`:
-- `UPDATE analysis_cache SET dart_summary_json = ? WHERE cache_key = ?`
-- 다른 필드 영향 없음 (auto-analyze cron 과 충돌 회피)
-- row 없으면 (한 번도 분석 안 된 종목) → INSERT (market/result_html 은 빈값)
+**Cache invalidation 명문화**: 오늘 cron 에서 critical_count=0 인 종목은 어제 LLM 요약 있더라도 `{"empty": true}` 로 덮어쓴다 (stale 방지).
+
+### 6.4 분석 본체와의 합성
+
+`report_generator._render_stock_card(item)` 에 `item["dart_summary"]` 키 추가:
+```python
+# main.py auto-analyze 또는 web 카드 렌더 직전:
+dart_summaries = dart_cache.list_summaries()  # dict[symbol, dict]
+for item in analyses:
+    item["dart_summary"] = dart_summaries.get(item["symbol"])
+```
+
+`_render_stock_card` 가 `item.get("dart_summary")` 를 `_render_dart_section` 에 전달.
 
 ## 7. 카드 표시
 
@@ -272,50 +365,34 @@ home + portfolio 카드 배지 줄에 작은 공시 배지:
 ## 8. main.py subcommand
 
 ```python
-parser.add_argument("dart-refresh", help="DART 공시 갱신 + LLM 요약 (cron)")
-dart_parser.add_argument("--no-llm", action="store_true",
-                          help="LLM 호출 skip (디버깅용, raw fetch 만)")
+parser.add_argument("dart-refresh", help="DART 공시 갱신 + 요약 (cron)")
 ```
 
-핸들러:
+`--no-llm` 플래그 제거 — 환경변수 `DART_SKIP_LLM=1` 로 대체 (SKIP_ML_PREDICTION 패턴 일관성).
+
+핸들러 — §6.3 의 atomic batch 흐름 그대로. 추가로:
+
 ```python
 if args.command == "dart-refresh":
-    from src import dart_client, dart_cache, dart_llm
+    from src import dart_client, dart_cache, dart_rules, dart_llm
     if not os.environ.get("DART_API_KEY"):
         logger.error("DART_API_KEY 미설정 — cron 중단")
         sys.exit(1)
+    # log filter 등록 (DART_API_KEY redaction)
+    from src.log_filter import install_secret_filter
+    install_secret_filter([os.environ["DART_API_KEY"]])
+
     dart_cache.init_db()
-    n = dart_client.refresh_corp_codes_if_stale(days=30)
+    n = dart_client.refresh_corp_codes_if_stale(days=7)
     logger.info("corp_codes 갱신: %d row", n)
-    config = load_config()
-    success = 0
-    for stock in config["stocks"].get("korea", []):
-        try:
-            corp_code = dart_client.get_corp_code(stock["symbol"])
-            if not corp_code:
-                logger.warning("corp_code 없음 — skip: %s", stock["symbol"])
-                continue
-            disclosures = dart_client.fetch_disclosures(corp_code, days=30)
-            dart_cache.insert_disclosures(stock["symbol"], corp_code, disclosures)
-            if dart_client.has_critical_events(disclosures):
-                if args.no_llm:
-                    continue
-                summary = dart_llm.summarize_disclosures(
-                    stock["symbol"], stock["name"], disclosures,
-                )
-            else:
-                summary = {"empty": True, "generated_at": int(time.time())}
-            if summary is not None:
-                analysis_cache.update_dart_summary(
-                    stock["symbol"], json.dumps(summary, ensure_ascii=False),
-                )
-            success += 1
-        except Exception as e:
-            logger.exception("dart-refresh 오류 — %s: %s", stock["symbol"], e)
-    purged = dart_cache.purge_old(days=90)
-    logger.info("dart-refresh 완료: ok=%d/%d, purged=%d", success, len(config["stocks"]["korea"]), purged)
+    # ... (§6.3 atomic batch 흐름)
+    purged = dart_cache.purge_old(days=14)  # raw retention 14일
+    logger.info("dart-refresh 완료: ok=%d/%d, llm=%d, rule=%d, empty=%d, purged=%d",
+                success, total, llm_count, rule_count, empty_count, purged)
     return
 ```
+
+**raw disclosures retention**: 90일 → **14일 단축** (재처리 시나리오는 LLM 비용 재발생 부담이라 가치 작음).
 
 ## 9. launchd plist (macmini)
 
@@ -323,14 +400,17 @@ if args.command == "dart-refresh":
 
 - Label: `ai.stock-analyzer.dart-refresh`
 - ProgramArguments: `python main.py dart-refresh`
-- StartCalendarInterval: Hour=18, Minute=0 (KST)
-- EnvironmentVariables: PATH, DART_API_KEY, GEMINI_API_KEY
-- ML 환경 변수 불필요 (DART 는 ML 안 거침)
+- StartCalendarInterval: **Hour=19, Minute=30** (KST) — DS005 공시 18~19시 집중 접수, 19:30 이면 그날 99% 수집
+- EnvironmentVariables: PATH, **DART_API_KEY**, GEMINI_API_KEY
+- ML 환경 변수 불필요
+- WakeFromSleep / StartOnMount 등 macmini sleep 정책은 다른 기존 잡 패턴 따름
+
+**main.py lazy import 검증**: dart-refresh 핸들러가 ML 라이브러리 (numpy/lightgbm/torch) 를 import 안 하는지 검증. main.py top-level import 가 ML 모듈 끌어들이면 SIGSEGV 위험 (libomp fork). 필요 시 핸들러 진입 후 lazy import 패턴 적용.
 
 ## 10. DB 스키마
 
 ```sql
--- corp_code 매핑 (월 1회 다운로드)
+-- corp_code 매핑 (주 1회 / 7일 stale)
 CREATE TABLE IF NOT EXISTS corp_codes (
     corp_code   TEXT PRIMARY KEY,
     corp_name   TEXT NOT NULL,
@@ -353,11 +433,19 @@ CREATE TABLE IF NOT EXISTS disclosures (
 );
 CREATE INDEX IF NOT EXISTS idx_disclosures_stock ON disclosures(stock_code, rcept_dt DESC);
 
--- analysis_cache 마이그레이션
-ALTER TABLE analysis_cache ADD COLUMN dart_summary_json TEXT;
+-- dart_summaries (analysis_cache 와 분리)
+CREATE TABLE IF NOT EXISTS dart_summaries (
+    symbol           TEXT PRIMARY KEY,
+    summary_json     TEXT NOT NULL,
+    sentiment        TEXT,
+    critical_count   INTEGER NOT NULL,
+    generated_at     INTEGER NOT NULL,
+    model            TEXT,
+    source           TEXT NOT NULL    -- "llm" | "rule" | "empty"
+);
 ```
 
-Retention: `disclosures` 테이블 90일 이전 row 자동 삭제 (dart-refresh cron 끝에).
+Retention: `disclosures` 테이블 **14일** 이전 row 자동 삭제 (dart-refresh cron 끝에). dart_summaries 는 retention 없음 (종목당 1 row, 매일 갱신).
 
 ## 11. 테스트
 
@@ -366,50 +454,67 @@ Retention: `disclosures` 테이블 90일 이전 row 자동 삭제 (dart-refresh 
 2. `test_get_corp_code_finds_listed_stock` — '005930' → '00126380'
 3. `test_get_corp_code_returns_none_for_unknown`
 4. `test_fetch_disclosures_aggregates_all_endpoints` — 9 API mock → dict 통합
-5. `test_fetch_disclosures_partial_failure_returns_partial` — 1 API 실패해도 나머지 반환
+5. `test_fetch_disclosures_partial_failure_returns_partial`
 6. `test_fetch_disclosures_rate_limit_sleep` — 호출 간 sleep 검증
 7. `test_fetch_disclosures_empty_results_all_keys_present`
-8. `test_refresh_corp_codes_skips_if_recent` — 30일 이내 갱신 시 download skip
-9. `test_has_critical_events_true_for_treasury_acquire`
-10. `test_has_critical_events_false_for_empty_dict`
-11. `test_has_critical_events_false_for_list_only` — DS001 list 만 있고 critical 0건
+8. `test_refresh_corp_codes_skips_if_recent` — 7일 이내 갱신 시 download skip
+
+`tests/test_dart_rules.py` (6):
+9. `test_classify_treasury_acquire_is_tier1_critical`
+10. `test_classify_exec_holders_below_threshold_excluded` — 임원 1주 매수 (< 1000주) → 제외
+11. `test_classify_exec_holders_above_threshold_included` — 임원 5000주 매수 → critical
+12. `test_classify_major_holders_below_threshold_excluded` — 변동 0.1%p (< 0.5%p) → 제외
+13. `test_classify_should_call_llm_true_when_count_ge_2`
+14. `test_render_template_treasury_acquire_returns_buy_view`
 
 `tests/test_dart_cache.py` (4):
-12. `test_corp_codes_upsert_dedup`
-13. `test_disclosures_insert_dedup_by_rcept_no` — UNIQUE constraint
-14. `test_purge_old_disclosures` — 90일 이전 삭제
-15. `test_analysis_cache_update_dart_summary_preserves_other_fields`
 
-`tests/test_dart_llm.py` (4):
-16. `test_summarize_disclosures_parses_gemini_json` — Gemini mock → dict
-17. `test_summarize_disclosures_handles_parse_failure_falls_back_to_raw`
-18. `test_summarize_disclosures_api_error_returns_none`
-19. `test_summarize_disclosures_required_fields_present` (summary, sentiment, key_events, trading_view, model, generated_at)
+`tests/test_dart_cache.py` (5):
+15. `test_corp_codes_upsert_dedup`
+16. `test_disclosures_insert_dedup_by_rcept_no` — UNIQUE constraint
+17. `test_purge_old_disclosures_14days`
+18. `test_dart_summaries_upsert_atomic` — INSERT ... ON CONFLICT 동작
+19. `test_list_summaries_returns_dict_keyed_by_symbol`
+
+`tests/test_dart_llm.py` (5):
+20. `test_summarize_disclosures_parses_gemini_json`
+21. `test_summarize_disclosures_validates_sentiment_enum` — "긍정적" 같은 변형 → "중립" fallback
+22. `test_summarize_disclosures_validates_trading_view_prefix` — "강한매수" → "관망 — LLM 응답 형식 오류"
+23. `test_summarize_disclosures_handles_parse_failure_falls_back_to_raw`
+24. `test_summarize_disclosures_api_error_returns_none`
+
+`tests/test_log_filter.py` (2):
+25. `test_secret_filter_redacts_api_key_in_message`
+26. `test_secret_filter_passthrough_when_no_secret`
 
 `tests/test_report_generator.py` (4 추가):
-20. `test_render_dart_section_with_summary` — 정상 dict → HTML 포함
-21. `test_render_dart_section_empty_marker` — {"empty": True} → "공시 없음" 텍스트
-22. `test_render_dart_section_none_returns_empty_string`
-23. `test_render_stock_card_includes_dart_section_when_present`
+27. `test_render_dart_section_with_summary` — 정상 dict → HTML + DART 출처 footnote
+28. `test_render_dart_section_empty_marker` — {"empty": True} → "공시 없음" 텍스트
+29. `test_render_dart_section_none_returns_empty_string`
+30. `test_render_dart_section_escapes_user_content` — LLM 출력에 `<script>` 포함 시 escape 검증 (XSS)
 
-`tests/test_analysis_cache.py` (2 추가):
-24. `test_update_dart_summary_preserves_signal_value` — 기존 signal_value 영향 없음
-25. `test_get_returns_dart_summary_json_field`
+`tests/test_main.py` (2 추가):
+31. `test_main_dart_refresh_exits_when_api_key_missing` — sys.exit(1)
+32. `test_main_dart_refresh_does_not_import_ml_modules` — ML 모듈 import 없음 (libomp 회피)
 
-총 25 신규 테스트 + 기존 회귀 0.
+총 32 신규 테스트 + 기존 회귀 0.
 
 ## 12. 에러 처리 정책
 
 | 경우 | 동작 |
 |---|---|
 | DART_API_KEY 미설정 | cron 즉시 `sys.exit(1)` + logger.error |
+| **로그 출력 시 DART_API_KEY 포함** | `log_filter.SecretFilter` 로 `***` 마스킹. URL query param 등에 키가 들어가도 자동 redacting |
 | corpCode.xml ZIP 다운로드 실패 | warn + 기존 corp_codes 그대로 사용 |
 | 개별 endpoint 호출 실패 (1개) | warn + 다른 endpoint 계속, 부분 결과 반환 |
+| DART status "013" (no data) | 정상 응답으로 처리 (빈 list 반환), warn 안 함 |
+| DART status "020" / "021" (API 사용 제한) | warn + 모든 종목 skip (이미 limit 도달) |
 | 종목 1개 전체 실패 | warn + 다음 종목 계속 |
-| corp_code 매핑 없는 종목 | warn + skip |
-| Gemini LLM 호출 실패 (timeout/429) | warn + summary=None → dart_summary_json 미갱신 (UI 이전 값 유지) |
-| Gemini JSON parse 실패 | fallback dict (raw text, sentiment=중립, trading_view="LLM 응답 형식 오류") |
-| analysis_cache row 없음 | INSERT 자동 생성 (market/result_html 빈값) |
+| corp_code 매핑 없는 종목 | warn + skip → 즉시 corp_codes 재다운로드 트리거 (이번 cron 만 유효) |
+| Gemini LLM 호출 실패 (timeout/429) | warn + summary=None → dart_summaries row 미갱신 (이전 값 유지) |
+| Gemini sentiment enum 위반 (예: "긍정적") | sentiment="중립" + warn |
+| Gemini trading_view prefix 위반 (예: "강한매수") | "관망 — LLM 응답 형식 오류" fallback |
+| Gemini JSON parse 실패 | fallback dict (raw text, sentiment=중립, trading_view="관망 — 응답 형식 오류") |
 
 ## 13. 호환성
 
@@ -432,7 +537,7 @@ Retention: `disclosures` 테이블 90일 이전 row 자동 삭제 (dart-refresh 
 | 리스크 | 영향 | 완화 |
 |---|---|---|
 | DART API 점검/장애 | 하루 분석 결과 미갱신 | 다음날 cron 재시도. 분석 본체 영향 0. |
-| corp_code 매핑 누락 (신규 상장) | 신규 종목 1개월간 공시 미수집 | 월 1회 corp_codes 갱신 + warn 로그. |
+| corp_code 매핑 누락 (신규 상장) | 신규 종목 최대 7일 공시 누락 | 7일 stale 정책 + 매핑 누락 발견 시 즉시 재다운로드 트리거. |
 | Gemini rate limit (429) | 일부 종목 요약 누락 | retry 1회 + sleep 후 fallback to None. UI 에서 이전 요약 유지. |
 | LLM 환각/오해석 | 잘못된 매매 시그널 표시 | UI 에 "model: gemini-2.5-flash" 명시 + key_events 원본 표시로 사용자 판단 보조. trading_view 는 1줄 근거 포함. |
 | 다중 사용자 portfolio 확장 시 호환성 | (현재 단일 user 라 영향 없음) | 추후 spec 별도. |
