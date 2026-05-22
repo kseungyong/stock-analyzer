@@ -169,3 +169,66 @@ class TestTranslateWithBackoff:
 
         assert result == "삼성전자 호실적"  # fallback to Korean
         assert news_kr._TRANSLATE_BACKOFF in sleep_calls
+
+
+class TestFetchNewsKr:
+    def test_uses_cache_when_hit(self, _tmp_cache_dir, monkeypatch):
+        """캐시 hit 이면 _scrape 호출되지 않음."""
+        cached = [{"title": "캐시된 뉴스", "title_en": "cached news",
+                   "link": "x", "publisher": "p", "published": "d",
+                   "summary": "", "summary_en": ""}]
+        news_kr._cache_put("005930.KS", cached)
+        scrape_mock = MagicMock()
+        monkeypatch.setattr(news_kr, "_scrape_naver_finance", scrape_mock)
+
+        result = news_kr.fetch_news_kr("005930.KS")
+        assert result == cached
+        scrape_mock.assert_not_called()
+
+    def test_cache_miss_fetches_translates_caches(self, _tmp_cache_dir, monkeypatch):
+        """캐시 miss → scrape → translate → cache."""
+        raw = [{"title": "삼성전자 호실적", "title_en": "",
+                "link": "x", "publisher": "p", "published": "d",
+                "summary": "", "summary_en": ""}]
+        monkeypatch.setattr(news_kr, "_scrape_naver_finance", lambda c: raw)
+        monkeypatch.setattr(
+            news_kr, "_translate_with_backoff",
+            lambda t: "Samsung Electronics good earnings" if t else "",
+        )
+        monkeypatch.setattr(news_kr.time, "sleep", lambda s: None)  # speed test
+
+        result = news_kr.fetch_news_kr("005930.KS")
+        assert len(result) == 1
+        assert result[0]["title"] == "삼성전자 호실적"
+        assert result[0]["title_en"] == "Samsung Electronics good earnings"
+        # 캐시 파일 생성됨
+        assert (_tmp_cache_dir / "005930.KS.json").exists()
+
+    def test_empty_success_is_cached(self, _tmp_cache_dir, monkeypatch):
+        """scrape 성공 + 0건 → 빈 list 도 캐시."""
+        monkeypatch.setattr(news_kr, "_scrape_naver_finance", lambda c: [])
+        monkeypatch.setattr(news_kr.time, "sleep", lambda s: None)
+
+        result = news_kr.fetch_news_kr("BORING.KS")
+        assert result == []
+        assert (_tmp_cache_dir / "BORING.KS.json").exists()
+
+    def test_failure_not_cached(self, _tmp_cache_dir, monkeypatch):
+        """scrape 실패 (None) → 빈 list 반환 but 캐시 안 함."""
+        monkeypatch.setattr(news_kr, "_scrape_naver_finance", lambda c: None)
+        monkeypatch.setattr(news_kr.time, "sleep", lambda s: None)
+
+        result = news_kr.fetch_news_kr("005930.KS")
+        assert result == []
+        assert not (_tmp_cache_dir / "005930.KS.json").exists()
+
+    def test_krx_code_zfilled_for_short_symbol(self, _tmp_cache_dir, monkeypatch):
+        """5930.KS 같은 잘못된 입력도 005930 으로 정규화."""
+        captured = {}
+        def fake_scrape(code):
+            captured["code"] = code
+            return []
+        monkeypatch.setattr(news_kr, "_scrape_naver_finance", fake_scrape)
+        monkeypatch.setattr(news_kr.time, "sleep", lambda s: None)
+        news_kr.fetch_news_kr("5930.KS")
+        assert captured["code"] == "005930"

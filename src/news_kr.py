@@ -177,3 +177,44 @@ def _translate_with_backoff(text: str) -> str:
         else:
             logger.warning("번역 실패 (한국어 원본 유지): %s", e)
         return text
+
+
+_SCRAPE_SLEEP_MIN = 0.5
+_SCRAPE_SLEEP_MAX = 1.5
+
+
+def _normalize_krx_code(symbol: str) -> str:
+    """`.KS`/`.KQ` 제거 후 6자리 zero-padding."""
+    return symbol.split(".")[0].zfill(6)
+
+
+def fetch_news_kr(symbol: str, max_items: int = 10) -> list[dict]:
+    """Naver Finance 종목 뉴스 fetch + 1h 캐시 + ko→en 번역.
+
+    빈 list 반환 조건:
+    - 실제 뉴스가 0건 (성공) — 캐시됨
+    - HTTP/parse 실패 — 캐시 안 됨 (다음 호출에서 재시도)
+
+    호출자가 캐시 vs 실패를 구별할 필요 없음 (둘 다 빈 list).
+    """
+    cached = _cache_get(symbol)
+    if cached is not None:
+        return cached[:max_items]
+
+    krx_code = _normalize_krx_code(symbol)
+    items = _scrape_naver_finance(krx_code)
+    if items is None:
+        # parse 실패 — 캐시 skip
+        return []
+
+    # 번역 (각 item title)
+    for item in items:
+        item["title_en"] = _translate_with_backoff(item["title"])
+        time.sleep(_TRANSLATE_SLEEP)
+
+    _cache_put(symbol, items)
+
+    # 다음 종목 호출 전 jitter sleep (WAF 회피)
+    time.sleep(random.uniform(_SCRAPE_SLEEP_MIN, _SCRAPE_SLEEP_MAX))
+
+    return items[:max_items]
