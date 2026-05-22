@@ -12,10 +12,18 @@ import re
 from datetime import datetime, timedelta
 
 from deep_translator import GoogleTranslator
+from src.news_kr import fetch_news_kr
 
 logger = logging.getLogger(__name__)
 
 _translator = GoogleTranslator(source="en", target="ko")
+_translator_ko_en = GoogleTranslator(source="ko", target="en")
+
+
+@lru_cache(maxsize=512)
+def _translate_ko_to_en_cached(text: str) -> str:
+    """한국어 → 영어 번역. 결과 캐싱."""
+    return _translator_ko_en.translate(text)
 
 
 def _is_english(text: str) -> bool:
@@ -128,11 +136,15 @@ def fetch_institutional_data(symbol: str, period_days: int = 90) -> pd.DataFrame
 
 
 def fetch_news(symbol: str, max_items: int = 10) -> list[dict]:
-    """yfinance에서 종목 관련 뉴스를 수집한다.
+    """종목 관련 뉴스 수집. 한국 종목(.KS/.KQ)은 Naver Finance, 그 외는 yfinance.
 
     Returns:
-        [{"title": ..., "link": ..., "publisher": ..., "published": ...}, ...]
+        [{"title", "title_en", "link", "publisher", "published",
+          "summary", "summary_en"}, ...]
     """
+    if symbol.endswith((".KS", ".KQ")):
+        return fetch_news_kr(symbol, max_items=max_items)
+
     try:
         ticker = yf.Ticker(symbol)
         news = ticker.news or []
@@ -140,9 +152,7 @@ def fetch_news(symbol: str, max_items: int = 10) -> list[dict]:
         for item in news[:max_items]:
             content = item.get("content", {})
             summary = content.get("summary", "")
-            # HTML 태그 제거
             summary = re.sub(r"<[^>]+>", "", summary).strip()
-            # 너무 길면 자르기
             if len(summary) > 200:
                 summary = summary[:200].rsplit(" ", 1)[0] + "..."
             title = content.get("title", "")
