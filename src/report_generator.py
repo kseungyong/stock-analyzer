@@ -296,6 +296,18 @@ _DART_SENTIMENT_CLASS = {
 }
 
 
+def _format_dart_asof(ts) -> str:
+    """unix timestamp → 'YYYY-MM-DD HH:MM KST'."""
+    if not ts:
+        return "—"
+    try:
+        from datetime import datetime, timezone, timedelta
+        kst = timezone(timedelta(hours=9))
+        return datetime.fromtimestamp(int(ts), kst).strftime("%Y-%m-%d %H:%M KST")
+    except (ValueError, TypeError, OSError):
+        return "—"
+
+
 def _render_dart_section(summary: dict | None) -> str:
     """DART 공시 분석 섹션 HTML. None/빈 dict → 빈 문자열.
 
@@ -334,7 +346,7 @@ def _render_dart_section(summary: dict | None) -> str:
         f'<p class="dart-trading">'
         f'<strong class="trading-view-{sentiment_cls}">{trading_view}</strong>'
         f'</p>'
-        f'<p class="dart-asof">model: {model} | 출처: DART (금감원 전자공시)</p>'
+        f'<p class="dart-asof">분석: {_format_dart_asof(summary.get("generated_at"))} | model: {model} | 출처: DART (금감원 전자공시)</p>'
         f'</div>'
     )
 

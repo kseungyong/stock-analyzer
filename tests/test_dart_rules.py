@@ -59,6 +59,15 @@ class TestClassifyDisclosures:
         assert result["critical_events"][0]["type"] == "major_holders"
         assert result["critical_events"][0]["tier"] == "medium"
 
+    def test_exec_holders_above_value_threshold_included(self):
+        # 임원 적은 주식수지만 거래금액 2억원 (>= 1억) → critical
+        disc = _disclosures(exec_holders=[
+            {"rcept_no": "X", "stkqy": "100", "stkrt": "0.001",
+             "trd_amount": "200000000"}
+        ])
+        result = dart_rules.classify_disclosures(disc)
+        assert result["count"] == 1
+
     def test_should_call_llm_true_when_count_ge_2(self):
         disc = _disclosures(
             treasury_acquire=[{"rcept_no": "A", "aqpln_amount": "1"}],

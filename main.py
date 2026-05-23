@@ -544,16 +544,18 @@ def main():
             except Exception as e:
                 logger.exception("dart-refresh fetch 오류 — %s: %s", stock["symbol"], e)
 
-        # Phase 2: summary 생성 + atomic batch UPSERT
+        # Phase 2: summary 생성 → 메모리 누적
+        skip_llm = os.environ.get("DART_SKIP_LLM") == "1"
+        if skip_llm:
+            logger.info("DART_SKIP_LLM=1 — LLM 호출 skip, count>=2 종목도 skip")
         llm_count = rule_count = empty_count = 0
+        to_upsert: list[tuple] = []  # (symbol, summary_json, sentiment, count, model, source)
         for stock, classified in pending:
             try:
                 count = classified["count"]
                 if count == 0:
                     summary = {"empty": True, "generated_at": int(_time.time())}
-                    source = "empty"
-                    sentiment = None
-                    model = None
+                    source, sentiment, model = "empty", None, None
                     empty_count += 1
                 elif count == 1:
                     summary = dart_rules.render_template(classified["critical_events"][0])
@@ -562,6 +564,8 @@ def main():
                     model = summary.get("model")
                     rule_count += 1
                 else:
+                    if skip_llm:
+                        continue  # LLM skip (debug 모드) — 이전 값 유지
                     summary = dart_llm.summarize_disclosures(
                         stock["symbol"], stock["name"], classified,
                     )
@@ -571,14 +575,24 @@ def main():
                     sentiment = summary.get("sentiment")
                     model = summary.get("model")
                     llm_count += 1
-                dart_cache.upsert_summary(
-                    symbol=stock["symbol"],
-                    summary_json=_json.dumps(summary, ensure_ascii=False),
-                    sentiment=sentiment, critical_count=count,
-                    model=model, source=source,
-                )
+                to_upsert.append((
+                    stock["symbol"],
+                    _json.dumps(summary, ensure_ascii=False),
+                    sentiment, count, model, source,
+                ))
             except Exception as e:
                 logger.exception("dart-refresh summary 오류 — %s: %s", stock["symbol"], e)
+
+        # Phase 3: atomic batch commit (모든 upsert를 한 트랜잭션에서)
+        try:
+            with dart_cache.transaction() as conn:
+                for symbol, summary_json, sentiment, count, model, source in to_upsert:
+                    dart_cache.upsert_summary_within_tx(
+                        conn, symbol, summary_json, sentiment, count, model, source,
+                    )
+            logger.info("dart-refresh batch commit: %d rows", len(to_upsert))
+        except Exception as e:
+            logger.exception("dart-refresh batch commit 실패: %s", e)
 
         purged = dart_cache.purge_old(days=14)
         logger.info("dart-refresh 완료 — llm=%d rule=%d empty=%d purged=%d",

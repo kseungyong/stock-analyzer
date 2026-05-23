@@ -17,12 +17,14 @@ _TIER1_KEYS = (
     "capital_increase", "capital_decrease",
     "treasury_acquire", "treasury_dispose",
     "merger",
+    "free_increase",
 )
 
 # tier 2 — 임계치 적용
 _MAJOR_HOLDERS_MIN_DELTA_PP = 0.5      # 변동 비율 0.5%p 이상
 _MAJOR_HOLDERS_MIN_HOLDING_PCT = 5.0   # 보유 비율 5% 이상
 _EXEC_HOLDERS_MIN_QTY = 1000           # 변동 주식수 1000주 이상
+_EXEC_HOLDERS_MIN_VALUE = 100_000_000  # 1억원
 
 # 단일 case template — {type: (sentiment, trading_view, summary_template)}
 _TEMPLATES = {
@@ -45,6 +47,10 @@ _TEMPLATES = {
     "merger": (
         "중립", "관망 — 합병 효과 분석 필요 (시너지 vs 통합 비용)",
         "합병 결정 — 시너지/통합 비용 분석 필요",
+    ),
+    "free_increase": (
+        "중립", "관망 — 무상증자는 주주 비례 신주 발행 (분할 효과)",
+        "무상증자 결정 — 주주 비례 분할",
     ),
     "major_holders": (
         "중립", "관망 — 대량보유 변동, 보유자 의도 분석 필요",
@@ -94,10 +100,12 @@ def classify_disclosures(disclosures: dict) -> dict:
         if delta_pp >= _MAJOR_HOLDERS_MIN_DELTA_PP and holding >= _MAJOR_HOLDERS_MIN_HOLDING_PCT:
             events.append({"type": "major_holders", "tier": "medium", "raw": raw})
 
-    # tier 2 - exec_holders
+    # tier 2 - exec_holders (qty>=1000 OR 거래금액>=1억)
     for raw in disclosures.get("exec_holders") or []:
         qty = abs(_safe_int(raw.get("stkqy", 0)))
-        if qty >= _EXEC_HOLDERS_MIN_QTY:
+        # DART elestock 필드: trd_amount (거래금액), unrl_uppr_amount, etc — 가장 흔한 trd_amount 사용
+        value = abs(_safe_int(raw.get("trd_amount", 0)))
+        if qty >= _EXEC_HOLDERS_MIN_QTY or value >= _EXEC_HOLDERS_MIN_VALUE:
             events.append({"type": "exec_holders", "tier": "medium", "raw": raw})
 
     return {

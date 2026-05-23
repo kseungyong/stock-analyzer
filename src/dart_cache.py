@@ -178,6 +178,52 @@ def upsert_summary(
             conn.commit()
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def transaction():
+    """단일 connection + 명시적 BEGIN/COMMIT 으로 batch upsert.
+
+    사용 예:
+        with dart_cache.transaction() as conn:
+            for symbol, ... in pending:
+                dart_cache.upsert_summary_within_tx(conn, symbol, ...)
+    """
+    with _writer_lock:
+        conn = _connect()
+        conn.execute("BEGIN")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def upsert_summary_within_tx(
+    conn, symbol: str, summary_json: str, sentiment: str | None,
+    critical_count: int, model: str | None, source: str,
+) -> None:
+    """transaction() 안에서 호출. 자동 commit 없음 (caller가 처리)."""
+    now = int(time.time())
+    conn.execute(
+        "INSERT INTO dart_summaries "
+        "(symbol, summary_json, sentiment, critical_count, generated_at, model, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(symbol) DO UPDATE SET "
+        "  summary_json = excluded.summary_json, "
+        "  sentiment = excluded.sentiment, "
+        "  critical_count = excluded.critical_count, "
+        "  generated_at = excluded.generated_at, "
+        "  model = excluded.model, "
+        "  source = excluded.source",
+        (symbol, summary_json, sentiment, critical_count, now, model, source),
+    )
+
+
 def get_summary(symbol: str) -> dict | None:
     with closing(_connect()) as conn:
         row = conn.execute(
