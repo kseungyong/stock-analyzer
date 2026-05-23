@@ -230,6 +230,14 @@ def auto_analyze_market(market: str) -> None:
             if result is None:
                 logger.warning("자동분석 실패(결과 없음): %s", s["symbol"])
                 continue
+            # DART 요약 inject (있으면)
+            try:
+                from src import dart_cache as _dc
+                ds = _dc.get_summary(s["symbol"])
+                if ds:
+                    result["dart_summary"] = ds.get("summary_json")
+            except Exception as e:
+                logger.warning("dart_summary inject 실패: %s", e)
             html = _rg.generate_report([result])
             sig = result.get("signal") or {}
             bnf = result.get("bnf_signal") or {}
@@ -410,6 +418,7 @@ def main():
     subparsers.add_parser("backfill", help="예측 히스토리 backfill (launchd cron 용)")
     subparsers.add_parser("daily-email", help="다이제스트 이메일 발송 (launchd cron 용)")
     subparsers.add_parser("leaders-refresh", help="주도주 발굴 cron (launchd)")
+    subparsers.add_parser("dart-refresh", help="DART 공시 갱신 + 요약 (cron)")
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="자동 종목 정리 (composite < -5, 7일 연속)"
     )
@@ -495,6 +504,99 @@ def main():
             dry_run=args.dry_run,
         )
         logger.info("cleanup 결과: %s", result)
+        return
+
+    if args.command == "dart-refresh":
+        import json as _json
+        import time as _time
+        if not os.environ.get("DART_API_KEY"):
+            logger.error("DART_API_KEY 미설정 — cron 중단")
+            sys.exit(1)
+        from src.log_filter import install_secret_filter
+        install_secret_filter([os.environ["DART_API_KEY"]])
+
+        from src import dart_client, dart_cache, dart_rules, dart_llm
+        dart_cache.init_db()
+
+        n = dart_client.refresh_corp_codes_if_stale(days=7)
+        logger.info("corp_codes 갱신: %d row", n)
+
+        config = load_config()
+        stocks = config.get("stocks", {}).get("korea", [])
+        logger.info("dart-refresh 시작 — n=%d", len(stocks))
+
+        # Phase 1: 모든 종목 fetch + classify (메모리 누적)
+        pending: list[tuple] = []
+        for stock in stocks:
+            try:
+                corp_code = dart_client.get_corp_code(stock["symbol"])
+                if not corp_code:
+                    logger.warning("corp_code 없음 — skip: %s", stock["symbol"])
+                    continue
+                disclosures = dart_client.fetch_disclosures(corp_code, days=30)
+                # raw 저장 (디버깅용)
+                stock_code = stock["symbol"].split(".")[0]
+                for dtype, rows in disclosures.items():
+                    if rows:
+                        dart_cache.insert_disclosures(stock_code, corp_code, dtype, rows)
+                classified = dart_rules.classify_disclosures(disclosures)
+                pending.append((stock, classified))
+            except Exception as e:
+                logger.exception("dart-refresh fetch 오류 — %s: %s", stock["symbol"], e)
+
+        # Phase 2: summary 생성 → 메모리 누적
+        skip_llm = os.environ.get("DART_SKIP_LLM") == "1"
+        if skip_llm:
+            logger.info("DART_SKIP_LLM=1 — LLM 호출 skip, count>=2 종목도 skip")
+        llm_count = rule_count = empty_count = 0
+        to_upsert: list[tuple] = []  # (symbol, summary_json, sentiment, count, model, source)
+        for stock, classified in pending:
+            try:
+                count = classified["count"]
+                if count == 0:
+                    summary = {"empty": True, "generated_at": int(_time.time())}
+                    source, sentiment, model = "empty", None, None
+                    empty_count += 1
+                elif count == 1:
+                    summary = dart_rules.render_template(classified["critical_events"][0])
+                    source = "rule"
+                    sentiment = summary.get("sentiment")
+                    model = summary.get("model")
+                    rule_count += 1
+                else:
+                    if skip_llm:
+                        continue  # LLM skip (debug 모드) — 이전 값 유지
+                    summary = dart_llm.summarize_disclosures(
+                        stock["symbol"], stock["name"], classified,
+                    )
+                    if summary is None:
+                        continue  # LLM 실패 — 이전 값 유지
+                    source = "llm"
+                    sentiment = summary.get("sentiment")
+                    model = summary.get("model")
+                    llm_count += 1
+                to_upsert.append((
+                    stock["symbol"],
+                    _json.dumps(summary, ensure_ascii=False),
+                    sentiment, count, model, source,
+                ))
+            except Exception as e:
+                logger.exception("dart-refresh summary 오류 — %s: %s", stock["symbol"], e)
+
+        # Phase 3: atomic batch commit (모든 upsert를 한 트랜잭션에서)
+        try:
+            with dart_cache.transaction() as conn:
+                for symbol, summary_json, sentiment, count, model, source in to_upsert:
+                    dart_cache.upsert_summary_within_tx(
+                        conn, symbol, summary_json, sentiment, count, model, source,
+                    )
+            logger.info("dart-refresh batch commit: %d rows", len(to_upsert))
+        except Exception as e:
+            logger.exception("dart-refresh batch commit 실패: %s", e)
+
+        purged = dart_cache.purge_old(days=14)
+        logger.info("dart-refresh 완료 — llm=%d rule=%d empty=%d purged=%d",
+                    llm_count, rule_count, empty_count, purged)
         return
 
     if args.web:

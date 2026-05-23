@@ -341,3 +341,50 @@ class TestRenderRelPerf:
             "alpha_pp": 0.5, "as_of": "2026-05-18 09:00", "stage": "bogus_state",
         })
         assert "?bogus_state" in html
+
+
+class TestRenderDartSection:
+    def test_with_summary_renders_html(self):
+        from src.report_generator import _render_dart_section
+        summary = {
+            "summary": "자기주식 200억 취득",
+            "sentiment": "긍정",
+            "key_events": ["[20260520000001] 자기주식 200억"],
+            "trading_view": "매수 — 자사주 매입은 EPS 상승",
+            "model": "rule_based",
+            "generated_at": 1779562800,
+        }
+        html = _render_dart_section(summary)
+        assert "공시정보분석" in html
+        assert "자기주식 200억 취득" in html
+        assert "매수" in html
+        assert "trading-view-positive" in html
+        assert "출처: DART" in html
+
+    def test_empty_marker_renders_no_news_text(self):
+        from src.report_generator import _render_dart_section
+        html = _render_dart_section({"empty": True, "generated_at": 1779562800})
+        assert "최근 30일" in html
+        assert "공시 없음" in html
+        # 정상 dart-section CSS 가 적용되지만 sentiment 색상은 없음
+        assert "trading-view-positive" not in html
+        assert "trading-view-negative" not in html
+
+    def test_none_returns_empty_string(self):
+        from src.report_generator import _render_dart_section
+        assert _render_dart_section(None) == ""
+
+    def test_escapes_user_content(self):
+        # LLM 출력에 <script> 들어와도 escape
+        from src.report_generator import _render_dart_section
+        summary = {
+            "summary": "<script>alert('xss')</script>",
+            "sentiment": "중립",
+            "key_events": ["<img src=x>"],
+            "trading_view": "관망 — <b>bold</b>",
+            "model": "test", "generated_at": 1779562800,
+        }
+        html = _render_dart_section(summary)
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+        assert "<img" not in html
