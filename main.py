@@ -509,6 +509,13 @@ def main():
     if args.command == "dart-refresh":
         import json as _json
         import time as _time
+        # 증시 운영일이 아니면 즉시 종료 (주말/공휴일)
+        # DART_FORCE_REFRESH=1 로 수동 강제 가능
+        if os.environ.get("DART_FORCE_REFRESH") != "1":
+            from src.market_calendar import is_kr_market_open_today
+            if not is_kr_market_open_today():
+                logger.info("dart-refresh skip — 한국 증시 휴장일 (주말/공휴일)")
+                return
         if not os.environ.get("DART_API_KEY"):
             logger.error("DART_API_KEY 미설정 — cron 중단")
             sys.exit(1)
