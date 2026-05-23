@@ -1462,6 +1462,13 @@ def index():
     # 캐시 미리 일괄 fetch (정렬 + 카드 빌드 양쪽에서 사용)
     cache_by_symbol = {s["symbol"]: _safe_cache_get(s["symbol"]) for s in stocks}
 
+    # DART 공시 요약 — 한번에 fetch
+    try:
+        from src import dart_cache as _dart_cache
+        dart_summaries = _dart_cache.list_summaries()
+    except Exception:
+        dart_summaries = {}
+
     # Composite 정렬 — Tech + BNF + Pattern×0.5 (Pattern range ±10 정규화).
     # tier 0: 분석 완료 + 어떤 score 라도 있음 (composite 내림차순)
     # tier 1: 분석 완료 + 모든 score NULL
@@ -1611,6 +1618,17 @@ def index():
                 f'title="Tech+BNF+Pattern×0.5">📊 {sign}{comp:.1f}</span>'
             )
 
+        dart_summary_row = dart_summaries.get(s["symbol"])
+        dart_badge_html = ""
+        if dart_summary_row:
+            sent = dart_summary_row.get("sentiment")
+            if sent == "긍정":
+                dart_badge_html = '<span class="badge" style="background:#16A34A;color:#fff;">🟢 공시+</span>'
+            elif sent == "부정":
+                dart_badge_html = '<span class="badge" style="background:#DC2626;color:#fff;">🔴 공시-</span>'
+            elif sent == "중립":
+                dart_badge_html = '<span class="badge" style="background:#D97706;color:#fff;">🟡 공시=</span>'
+
         cards_by_market.setdefault(s["market"], []).append(f"""
         <div class="stock-card" data-name="{escape(s['name']).lower()}" data-symbol="{escape(s['symbol']).lower()}">
           <div class="stock-card-header">
@@ -1623,6 +1641,7 @@ def index():
               {signal_badge_html}
               {bnf_badge_html}
               {alpha_badge_html}
+              {dart_badge_html}
               {pattern_badge_html}
               <span class="badge {badge_cls}">{market_label}</span>
             </div>
@@ -2719,7 +2738,8 @@ def _format_signed(value: float | None, market: str | None,
     return f"{sign}{value:.2f}%"
 
 
-def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
+def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str],
+                    dart_summaries: dict | None = None) -> str:
     sym = h["symbol"]
     name = name_map.get(sym, sym)
     market = h.get("market") or _market_of(sym)
@@ -2832,6 +2852,18 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
         except (ValueError, KeyError, TypeError):
             pass
 
+    dart_badge_html = ""
+    if dart_summaries:
+        dart_summary_row = dart_summaries.get(sym)
+        if dart_summary_row:
+            sent = dart_summary_row.get("sentiment")
+            if sent == "긍정":
+                dart_badge_html = '<span class="badge" style="background:#16A34A;color:#fff;">🟢 공시+</span>'
+            elif sent == "부정":
+                dart_badge_html = '<span class="badge" style="background:#DC2626;color:#fff;">🔴 공시-</span>'
+            elif sent == "중립":
+                dart_badge_html = '<span class="badge" style="background:#D97706;color:#fff;">🟡 공시=</span>'
+
     # data-* 로 symbol/notes 전달 — JS 가 escape 안전하게 prompt 호출
     btn_data = f'data-edit-notes data-symbol="{escape(sym)}" data-notes="{escape(notes)}"'
     if notes:
@@ -2870,6 +2902,7 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str]) -> str:
           {signal_badge_html}
           {bnf_badge_html}
           {alpha_badge_html}
+          {dart_badge_html}
           {pattern_badge_html}
           <span class="badge {badge_cls}">{market_label}</span>
         </div>
@@ -3030,6 +3063,13 @@ def portfolio_view():
         )
     sort_bar = '<div style="display:flex;gap:6px;margin:12px 0;">' + "".join(sort_links) + '</div>'
 
+    # DART 공시 요약 — 한번에 fetch
+    try:
+        from src import dart_cache as _dart_cache
+        dart_summaries = _dart_cache.list_summaries()
+    except Exception:
+        dart_summaries = {}
+
     now_ts = int(time.time())
     if holdings:
         sections = []
@@ -3037,7 +3077,7 @@ def portfolio_view():
             rows = by_market.get(market) or []
             if not rows:
                 continue
-            grid = "".join(_portfolio_card(h, now_ts, name_map) for h in rows)
+            grid = "".join(_portfolio_card(h, now_ts, name_map, dart_summaries) for h in rows)
             sections.append(
                 f'<h2 style="margin:24px 0 8px 0;font-size:1.05rem;color:var(--slate-700);">'
                 f'{label} <span style="color:var(--slate-500);font-weight:normal;">'

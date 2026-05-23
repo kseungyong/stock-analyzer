@@ -289,6 +289,56 @@ def _render_rel_perf(rel_perf: dict | None) -> str:
     )
 
 
+_DART_SENTIMENT_CLASS = {
+    "긍정": "positive",
+    "부정": "negative",
+    "중립": "neutral",
+}
+
+
+def _render_dart_section(summary: dict | None) -> str:
+    """DART 공시 분석 섹션 HTML. None/빈 dict → 빈 문자열.
+
+    summary 형식:
+    - {"empty": True, "generated_at": int} — 공시 없음 marker
+    - {"summary", "sentiment", "key_events", "trading_view", "model", "generated_at"}
+    """
+    if not summary:
+        return ""
+
+    if summary.get("empty"):
+        return (
+            '<div class="dart-section">'
+            '<h4 class="section-title">📋 공시정보분석</h4>'
+            '<p class="dart-summary">최근 30일 critical 공시 없음.</p>'
+            '<p class="dart-asof">출처: DART (금감원 전자공시)</p>'
+            '</div>'
+        )
+
+    sentiment = summary.get("sentiment", "중립")
+    sentiment_cls = _DART_SENTIMENT_CLASS.get(sentiment, "neutral")
+    summary_text = html.escape(str(summary.get("summary", "")))
+    trading_view = html.escape(str(summary.get("trading_view", "")))
+    key_events = summary.get("key_events") or []
+    model = html.escape(str(summary.get("model", "")))
+
+    events_html = "".join(
+        f'<li>{html.escape(str(e))}</li>' for e in key_events
+    )
+
+    return (
+        f'<div class="dart-section">'
+        f'<h4 class="section-title">📋 공시정보분석</h4>'
+        f'<p class="dart-summary">{summary_text}</p>'
+        f'<ul class="dart-events">{events_html}</ul>'
+        f'<p class="dart-trading">'
+        f'<strong class="trading-view-{sentiment_cls}">{trading_view}</strong>'
+        f'</p>'
+        f'<p class="dart-asof">model: {model} | 출처: DART (금감원 전자공시)</p>'
+        f'</div>'
+    )
+
+
 def _render_stock_card(item: dict) -> str:
     """종목 분석 카드 HTML을 반환한다."""
     name = html.escape(item["name"])
@@ -305,6 +355,18 @@ def _render_stock_card(item: dict) -> str:
     sentiment_html = _render_sentiment(item.get("sentiment", {}))
     rel_perf_html = _render_rel_perf(item.get("rel_perf"))
 
+    dart_summary_raw = item.get("dart_summary")
+    # str (json) 이면 parse, dict 이면 그대로
+    if isinstance(dart_summary_raw, str):
+        try:
+            import json as _json
+            dart_summary = _json.loads(dart_summary_raw)
+        except (ValueError, TypeError):
+            dart_summary = None
+    else:
+        dart_summary = dart_summary_raw
+    dart_html = _render_dart_section(dart_summary)
+
     return f"""
     <div class="stock-card">
         <h3>{name} ({symbol_esc})</h3>
@@ -312,6 +374,7 @@ def _render_stock_card(item: dict) -> str:
            | <span class="{signal_cls}">{sig['signal']}</span> (점수: {sig['score']})</p>
         <p class="stock-reasons">{', '.join(sig['reasons']) if sig['reasons'] else '특이사항 없음'}</p>
         {rel_perf_html}
+        {dart_html}
         {sentiment_html}
         <h4 class="section-title">기술 지표 분석</h4>
         {indicators_html}

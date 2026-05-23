@@ -230,6 +230,14 @@ def auto_analyze_market(market: str) -> None:
             if result is None:
                 logger.warning("자동분석 실패(결과 없음): %s", s["symbol"])
                 continue
+            # DART 요약 inject (있으면)
+            try:
+                from src import dart_cache as _dc
+                ds = _dc.get_summary(s["symbol"])
+                if ds:
+                    result["dart_summary"] = ds.get("summary_json")
+            except Exception as e:
+                logger.warning("dart_summary inject 실패: %s", e)
             html = _rg.generate_report([result])
             sig = result.get("signal") or {}
             bnf = result.get("bnf_signal") or {}
