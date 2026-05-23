@@ -98,7 +98,8 @@ def summarize_disclosures(symbol: str, name: str, classified: dict) -> dict | No
     )
     gen_cfg = {
         "temperature": 0.3,
-        "max_output_tokens": 1024,
+        # 4096 — critical event 多 종목 (SK하이닉스 7건 등) 응답 잘림 방지 (leader_llm 동일)
+        "max_output_tokens": 4096,
         "response_mime_type": "application/json",
     }
 
@@ -117,9 +118,9 @@ def summarize_disclosures(symbol: str, name: str, classified: dict) -> dict | No
     try:
         parsed = json.loads(raw.strip())
     except json.JSONDecodeError:
-        logger.warning("dart_llm JSON parse 실패 — fallback")
+        logger.warning("dart_llm JSON parse 실패 (len=%d) — fallback", len(raw))
         return {
-            "summary": raw[:200],
+            "summary": "LLM 응답 파싱 실패 — DART 공시 원본 직접 확인 권장",
             "sentiment": "중립",
             "key_events": [],
             "trading_view": "관망 — LLM 응답 형식 오류",
