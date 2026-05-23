@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 import sqlite3
 import threading
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -23,6 +25,29 @@ CREATE TABLE IF NOT EXISTS corp_codes (
     modify_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_corp_codes_stock_code ON corp_codes(stock_code);
+
+CREATE TABLE IF NOT EXISTS disclosures (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    corp_code       TEXT NOT NULL,
+    stock_code      TEXT NOT NULL,
+    disclosure_type TEXT NOT NULL,
+    rcept_no        TEXT,
+    rcept_dt        TEXT,
+    raw_json        TEXT NOT NULL,
+    fetched_at      INTEGER NOT NULL,
+    UNIQUE(corp_code, disclosure_type, rcept_no)
+);
+CREATE INDEX IF NOT EXISTS idx_disclosures_stock ON disclosures(stock_code, rcept_dt DESC);
+
+CREATE TABLE IF NOT EXISTS dart_summaries (
+    symbol           TEXT PRIMARY KEY,
+    summary_json     TEXT NOT NULL,
+    sentiment        TEXT,
+    critical_count   INTEGER NOT NULL,
+    generated_at     INTEGER NOT NULL,
+    model            TEXT,
+    source           TEXT NOT NULL
+);
 """
 
 
@@ -74,3 +99,113 @@ def corp_codes_last_modify_date() -> str | None:
             "SELECT MAX(modify_date) FROM corp_codes"
         ).fetchone()
     return row[0] if row and row[0] else None
+
+
+# ---------------------------------------------------------------------------
+# disclosures
+# ---------------------------------------------------------------------------
+
+def insert_disclosures(
+    stock_code: str, corp_code: str, disclosure_type: str,
+    rows: list[dict], fetched_at: int | None = None,
+) -> int:
+    """INSERT OR IGNORE — UNIQUE 위반 (동일 rcept_no) 은 silent skip."""
+    if not rows:
+        return 0
+    ts = fetched_at if fetched_at is not None else int(time.time())
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO disclosures "
+                "(corp_code, stock_code, disclosure_type, rcept_no, rcept_dt, raw_json, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(corp_code, stock_code, disclosure_type,
+                  r.get("rcept_no") or "", r.get("rcept_dt") or "",
+                  r.get("raw_json") if isinstance(r.get("raw_json"), str)
+                    else _json.dumps(r, ensure_ascii=False),
+                  ts) for r in rows],
+            )
+            conn.commit()
+    return len(rows)
+
+
+def count_disclosures(stock_code: str) -> int:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM disclosures WHERE stock_code = ?",
+            (stock_code,),
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def purge_old(days: int = 14) -> int:
+    """fetched_at < now - days*86400 인 row 삭제. 반환: 삭제 row 수."""
+    cutoff = int(time.time()) - days * 86400
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            cur = conn.execute(
+                "DELETE FROM disclosures WHERE fetched_at < ?", (cutoff,),
+            )
+            conn.commit()
+            return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+# dart_summaries
+# ---------------------------------------------------------------------------
+
+def upsert_summary(
+    symbol: str, summary_json: str, sentiment: str | None,
+    critical_count: int, model: str | None, source: str,
+) -> None:
+    """INSERT ... ON CONFLICT(symbol) DO UPDATE — atomic."""
+    now = int(time.time())
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            conn.execute(
+                "INSERT INTO dart_summaries "
+                "(symbol, summary_json, sentiment, critical_count, generated_at, model, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(symbol) DO UPDATE SET "
+                "  summary_json = excluded.summary_json, "
+                "  sentiment = excluded.sentiment, "
+                "  critical_count = excluded.critical_count, "
+                "  generated_at = excluded.generated_at, "
+                "  model = excluded.model, "
+                "  source = excluded.source",
+                (symbol, summary_json, sentiment, critical_count, now, model, source),
+            )
+            conn.commit()
+
+
+def get_summary(symbol: str) -> dict | None:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT symbol, summary_json, sentiment, critical_count, "
+            "generated_at, model, source FROM dart_summaries WHERE symbol = ?",
+            (symbol,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "symbol": row[0], "summary_json": row[1], "sentiment": row[2],
+        "critical_count": row[3], "generated_at": row[4],
+        "model": row[5], "source": row[6],
+    }
+
+
+def list_summaries() -> dict[str, dict]:
+    """{symbol: row_dict} — web/report 가 한 번에 fetch."""
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT symbol, summary_json, sentiment, critical_count, "
+            "generated_at, model, source FROM dart_summaries"
+        ).fetchall()
+    return {
+        r[0]: {
+            "symbol": r[0], "summary_json": r[1], "sentiment": r[2],
+            "critical_count": r[3], "generated_at": r[4],
+            "model": r[5], "source": r[6],
+        }
+        for r in rows
+    }

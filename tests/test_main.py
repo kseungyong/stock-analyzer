@@ -222,3 +222,19 @@ class TestAnalyzeStockBnfSignal:
         assert result["bnf_signal"]["market_disparity"] is None
         # BnF 경로에서는 market=None이므로 fetch_market_df 호출 없어야 함
         assert bnf_called == []
+
+
+class TestDartRefresh:
+    def test_exits_when_api_key_missing(self, monkeypatch):
+        """DART_API_KEY 미설정 시 sys.exit(1)."""
+        monkeypatch.delenv("DART_API_KEY", raising=False)
+        import main, sys
+        # argparse 시뮬레이션
+        old_argv = sys.argv
+        sys.argv = ["main.py", "dart-refresh"]
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                main.main()
+            assert exc_info.value.code == 1
+        finally:
+            sys.argv = old_argv
