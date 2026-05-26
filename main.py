@@ -41,15 +41,26 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).parent / "config" / "settings.yaml"
 
 
-def _next_business_day_unix(last_index) -> int:
-    """df 마지막 인덱스 → 다음 영업일 KST 자정 → UTC unix epoch."""
+def _next_trading_day_unix(last_index, symbol: str) -> int:
+    """df 마지막 거래일 → 거래소 캘린더 기준 다음 거래일 KST 자정 → UTC unix.
+
+    .KS/.KQ → XKRX (한국), 그 외 → XNYS (미국). 공휴일 자동 skip.
+    """
+    import pandas_market_calendars as mcal
+    exchange = "XKRX" if symbol.endswith((".KS", ".KQ")) else "XNYS"
+    cal = mcal.get_calendar(exchange)
     ts = pd.Timestamp(last_index)
     if ts.tz is None:
         ts = ts.tz_localize("Asia/Seoul", nonexistent="shift_forward", ambiguous="raise")
     else:
         ts = ts.tz_convert("Asia/Seoul")
-    next_bday = (ts + pd.tseries.offsets.BDay(1)).normalize()
-    return int(next_bday.tz_convert("UTC").timestamp())
+    start = ts.date() + pd.Timedelta(days=1)
+    end = ts.date() + pd.Timedelta(days=10)
+    valid = cal.valid_days(start_date=start, end_date=end)
+    if len(valid) == 0:
+        raise RuntimeError(f"{exchange} 10일 내 거래일 없음 — 캘린더 데이터 의심")
+    next_day = pd.Timestamp(valid[0].date()).tz_localize("Asia/Seoul")
+    return int(next_day.tz_convert("UTC").timestamp())
 
 
 def load_config() -> dict:
@@ -126,7 +137,7 @@ def analyze_stock(symbol: str, name: str, market: str | None = None) -> dict | N
         # live 예측 저장 (DB 장애 → 분석 결과는 정상 반환)
         try:
             last_close = float(df["Close"].iloc[-1])
-            target_date = _next_business_day_unix(df.index[-1])
+            target_date = _next_trading_day_unix(df.index[-1], symbol)
             prediction_history.insert_live(symbol, prediction, last_close, target_date)
         except Exception as e:
             logger.warning("insert_live 실패 (분석 결과는 정상 반환): %s", e)
