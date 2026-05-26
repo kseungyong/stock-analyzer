@@ -446,11 +446,18 @@ def main():
         return
 
     if args.command == "auto-analyze":
+        # 한국 휴장일 skip (auto-analyze korea 만). US 는 별도 운영시간 → 영향 없음.
+        if args.market == "korea" and os.environ.get("STOCK_ANALYZER_FORCE") != "1":
+            from src.market_calendar import is_kr_market_open_today
+            if not is_kr_market_open_today():
+                logger.info("auto-analyze korea skip — 한국 증시 휴장일 (주말/공휴일)")
+                os._exit(0)
         auto_analyze_market(args.market)
         # torch/transformers cleanup 중 종료 segfault 회피 — DB는 매 종목 commit 됨
         os._exit(0)
 
     if args.command == "backfill":
+        # 한국 휴장일 영향 미미 (미국 종목은 정상 평가, 한국 종목은 fetch 빈 결과 무해) → skip 안 함
         prediction_history.backfill_all(fetch_fn=fetch_stock_data)
         return
 
@@ -510,8 +517,9 @@ def main():
         import json as _json
         import time as _time
         # 증시 운영일이 아니면 즉시 종료 (주말/공휴일)
-        # DART_FORCE_REFRESH=1 로 수동 강제 가능
-        if os.environ.get("DART_FORCE_REFRESH") != "1":
+        # DART_FORCE_REFRESH=1 또는 STOCK_ANALYZER_FORCE=1 로 수동 강제 가능
+        if (os.environ.get("DART_FORCE_REFRESH") != "1"
+                and os.environ.get("STOCK_ANALYZER_FORCE") != "1"):
             from src.market_calendar import is_kr_market_open_today
             if not is_kr_market_open_today():
                 logger.info("dart-refresh skip — 한국 증시 휴장일 (주말/공휴일)")
