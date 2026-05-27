@@ -141,6 +141,8 @@ stocks:
     symbol: 042660.KS
   - name: KODEX AI전력핵심설비
     symbol: 487240.KS
+  - name: HD현대일렉트릭
+    symbol: 267260.KS
   - name: TIGER 삼성전자단일종목레버리지
     symbol: 0195R0.KS
   - name: KODEX SK하이닉스단일종목레버리지
