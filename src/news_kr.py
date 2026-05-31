@@ -212,10 +212,13 @@ def fetch_news_kr(symbol: str, max_items: int = 10) -> list[dict]:
         # parse 실패 — 캐시 skip
         return []
 
-    # 번역 (각 item title)
+    # 번역 (title + summary). FinBERT 영어 전용 — summary 미번역 시 sentiment 가 한국어로 들어가 전부 "중립" 처리됨.
     for item in items:
         item["title_en"] = _translate_with_backoff(item["title"])
         time.sleep(_TRANSLATE_SLEEP)
+        if item["summary"]:
+            item["summary_en"] = _translate_with_backoff(item["summary"])
+            time.sleep(_TRANSLATE_SLEEP)
 
     _cache_put(symbol, items)
 
