@@ -100,6 +100,13 @@ class TestAnalyzeSentiment:
         result = analyze_sentiment(items)
         assert isinstance(result, dict)
 
+    def test_korean_only_items_rejected(self):
+        """_en 필드에 한국어가 들어와도 FinBERT 에 안 들어가야 함 (전부 '중립' 처리 방어)."""
+        items = [{"title": "삼성전자 호실적", "title_en": "삼성전자 호실적",
+                  "summary": "한국어 요약", "summary_en": "한국어 요약"}]
+        result = analyze_sentiment(items)
+        assert result["label"] == "분석할 텍스트 없음"
+
 
 class TestPredictionCache:
     def setup_method(self):

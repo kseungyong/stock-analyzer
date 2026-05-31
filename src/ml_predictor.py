@@ -325,6 +325,14 @@ def _get_finbert():
     return _finbert_pipeline
 
 
+def _english_only(text: str) -> str:
+    """ASCII 비중 70% 미만이면 빈 문자열. FinBERT 한국어 입력 시 무조건 'neutral' 처리되는 문제 방어."""
+    if not text:
+        return ""
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    return text if ascii_chars / len(text) > 0.7 else ""
+
+
 def analyze_sentiment(news_items: list[dict]) -> dict:
     """FinBERT를 사용하여 뉴스 기사의 감성을 분석한다."""
     if not news_items:
@@ -332,8 +340,9 @@ def analyze_sentiment(news_items: list[dict]) -> dict:
 
     texts = []
     for item in news_items:
-        title = item.get("title_en") or item.get("title", "")
-        summary = item.get("summary_en") or item.get("summary", "")
+        # 번역 실패로 _en 필드에 한국어가 들어와 있을 수 있으므로 영어만 통과
+        title = _english_only(item.get("title_en", "")) or _english_only(item.get("title", ""))
+        summary = _english_only(item.get("summary_en", "")) or _english_only(item.get("summary", ""))
         text = ". ".join(filter(None, [title, summary]))
         if text:
             texts.append((item, text[:512]))
