@@ -176,3 +176,7 @@ stocks:
     symbol: QQQ
   - name: Vanguard Total Stock Market
     symbol: VTI
+  - name: GE Vernova Inc.
+    symbol: GEV
+  - name: Advanced Micro Devices, Inc.
+    symbol: AMD
