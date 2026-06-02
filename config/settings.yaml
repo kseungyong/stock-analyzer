@@ -145,6 +145,8 @@ stocks:
     symbol: 267260.KS
   - name: TIGER 삼성전자단일종목레버리지
     symbol: 0195R0.KS
+  - name: KODEX 삼성전자단일종목레버리지
+    symbol: 0193W0.KS
   - name: KODEX SK하이닉스단일종목레버리지
     symbol: 0193T0.KS
   - name: TIGER SK하이닉스단일종목레버리지
