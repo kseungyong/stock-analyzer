@@ -430,6 +430,10 @@ def main():
     subparsers.add_parser("daily-email", help="다이제스트 이메일 발송 (launchd cron 용)")
     subparsers.add_parser("leaders-refresh", help="주도주 발굴 cron (launchd)")
     subparsers.add_parser("dart-refresh", help="DART 공시 갱신 + 요약 (cron)")
+    subparsers.add_parser(
+        "foreign-ranking",
+        help="외인/기관/연기금 순매수 ranking → universe push (launchd cron 용)",
+    )
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="자동 종목 정리 (composite < -5, 7일 연속)"
     )
@@ -623,6 +627,22 @@ def main():
         purged = dart_cache.purge_old(days=14)
         logger.info("dart-refresh 완료 — llm=%d rule=%d empty=%d purged=%d",
                     llm_count, rule_count, empty_count, purged)
+        return
+
+    if args.command == "foreign-ranking":
+        # 한국 휴장일 skip — STOCK_ANALYZER_FORCE=1 로 강제 가능
+        if os.environ.get("STOCK_ANALYZER_FORCE") != "1":
+            from src.market_calendar import is_kr_market_open_today
+            if not is_kr_market_open_today():
+                logger.info("foreign-ranking skip — 한국 증시 휴장일")
+                return
+        from src import foreign_ranking
+        try:
+            result = foreign_ranking.run_daily()
+            logger.info("foreign-ranking 완료: %s", result)
+        except Exception as e:
+            logger.exception("foreign-ranking 실패: %s", e)
+            sys.exit(1)
         return
 
     if args.web:

@@ -2470,6 +2470,49 @@ def leaders_list():
     return render_template("leaders.html", rows=rows)
 
 
+@app.route("/foreign-ranking")
+def foreign_ranking_view():
+    """GET /foreign-ranking — 외인/기관/연기금 순매수 ranking (일별 + 5일 누적).
+
+    데이터 소스: foreign_ranking_history 테이블 (KIS API → 매일 16:00 launchd).
+    최신 snap_date 기준 일별/5일 ranking 을 3 투자자 × 2 기간 = 6 표로 표시.
+    """
+    from datetime import date as _date
+    from src import foreign_ranking as fr
+    import sqlite3 as _sqlite3
+
+    # 가장 최근 snap_date 조회 — 데이터 없으면 안내 페이지
+    try:
+        with _sqlite3.connect(fr._DB_PATH) as conn:
+            cur = conn.execute(
+                "SELECT MAX(snap_date) FROM foreign_ranking_history"
+            )
+            latest = (cur.fetchone() or (None,))[0]
+    except Exception as e:
+        app.logger.warning("foreign-ranking DB 조회 실패: %s", e)
+        latest = None
+
+    if not latest:
+        return render_template(
+            "foreign_ranking.html",
+            latest_date=None, rankings={}, market_label={},
+        )
+
+    snap = _date.fromisoformat(latest)
+    rankings: dict[str, dict[str, list[dict]]] = {}
+    for investor_key, (_prefix, label) in fr.INVESTORS.items():
+        rankings[investor_key] = {
+            "label": label,
+            "daily": fr.top_n_by_investor(snap, investor_key, period_days=1, n=10),
+            "weekly": fr.top_n_by_investor(snap, investor_key, period_days=5, n=10),
+        }
+    return render_template(
+        "foreign_ranking.html",
+        latest_date=latest,
+        rankings=rankings,
+    )
+
+
 @app.route("/leaders/<path:symbol>")
 def leaders_detail(symbol: str):
     """GET /leaders/<symbol> — 5축 스코어카드 + LLM 분석 + 메모 폼."""

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>외인/기관/연기금 ranking — Stock Analyzer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif;
+  background: #F8FAFC; color: #0F172A; line-height: 1.5;
+}
+.topbar {
+  background: #1E40AF; color: #fff; padding: 14px 24px;
+  display: flex; align-items: center; gap: 24px;
+}
+.topbar a { color: #DBEAFE; text-decoration: none; }
+.topbar a:hover { color: #fff; }
+.brand { font-weight: 700; font-size: 16px; }
+.container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 22px; margin-bottom: 6px; }
+.meta { color: #64748B; font-size: 13px; margin-bottom: 24px; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 20px;
+}
+.card {
+  background: #fff; border-radius: 10px; padding: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.card h3 {
+  font-size: 14px; font-weight: 600; color: #1E40AF;
+  margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #E2E8F0;
+}
+.card .period { color: #64748B; font-weight: 400; font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: #64748B; font-weight: 500; padding: 6px 4px; border-bottom: 1px solid #E2E8F0; }
+td { padding: 6px 4px; border-bottom: 1px solid #F1F5F9; }
+td.rank { color: #64748B; width: 24px; }
+td.name a { color: #1E40AF; text-decoration: none; }
+td.name a:hover { text-decoration: underline; }
+td.val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+td.val.pos { color: #16A34A; }
+td.val.neg { color: #DC2626; }
+td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; font-size: 12px; }
+.empty { text-align: center; color: #94A3B8; padding: 40px 0; font-size: 14px; }
+.legend {
+  background: #EFF6FF; border-left: 3px solid #3B82F6;
+  padding: 10px 14px; border-radius: 4px; margin-bottom: 20px;
+  font-size: 13px; color: #1E3A8A;
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">Stock Analyzer</span>
+  <a href="/">홈</a>
+  <a href="/leaders">주도주</a>
+  <a href="/foreign-ranking">외인 ranking</a>
+  <a href="/portfolio">포트폴리오</a>
+</div>
+
+<div class="container">
+  <h1>외인/기관/연기금 순매수 ranking</h1>
+
+  {% if not latest_date %}
+    <div class="legend">
+      데이터 없음. 매일 16:00 KST 자동 수집됩니다.
+      수동 실행: <code>python main.py foreign-ranking</code>
+    </div>
+    <div class="empty">아직 ranking 데이터가 없습니다.</div>
+  {% else %}
+    <div class="meta">
+      최근 데이터: <strong>{{ latest_date }}</strong>
+      &nbsp;·&nbsp; 데이터 소스: KIS Developers OpenAPI (foreign-institution-total)
+      &nbsp;·&nbsp; 매일 16:00 KST 갱신
+    </div>
+    <div class="legend">
+      <strong>일별</strong> = 가장 최근 영업일 1일 순매수.
+      <strong>5일 누적</strong> = 최근 5영업일 합산 순매수.
+      단위: 거래대금 (백만원), 수량 (주). 종목명 클릭 시 개별 분석 페이지로 이동.
+    </div>
+
+    <div class="grid">
+    {% for investor_key, data in rankings.items() %}
+      {% for period in ['daily', 'weekly'] %}
+      <div class="card">
+        <h3>
+          {{ data.label }} 순매수 상위 10
+          <span class="period">— {{ '일별' if period == 'daily' else '5일 누적' }}</span>
+        </h3>
+        {% set rows = data[period] %}
+        {% if rows %}
+        <table>
+          <thead>
+            <tr>
+              <th></th><th>종목</th><th style="text-align:right">거래대금</th>
+              <th style="text-align:right">순매수량</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td class="rank">{{ loop.index }}</td>
+              <td class="name">
+                <a href="/stock/{{ r.symbol }}.KS">{{ r.name }}</a>
+                <span style="color:#94A3B8; font-size:11px">{{ r.symbol }}</span>
+              </td>
+              <td class="val {% if r.val > 0 %}pos{% elif r.val < 0 %}neg{% endif %}">
+                {{ '{:+,}'.format(r.val) }}
+              </td>
+              <td class="qty">{{ '{:,}'.format(r.qty) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="empty">해당 기간 데이터 없음</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% endfor %}
+    </div>
+  {% endif %}
+</div>
+</body>
+</html>
