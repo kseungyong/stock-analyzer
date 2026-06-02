@@ -996,6 +996,7 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
   <div class="topbar-nav">
     <a class="topbar-link" href="/">대시보드</a>
     <a class="topbar-link" href="/leaders">주도주</a>
+    <a class="topbar-link" href="/foreign-ranking">외인 ranking</a>
     <a class="topbar-link" href="/portfolio">포트폴리오</a>
     <a class="topbar-link" href="/jobs">작업 내역</a>
     {user_badge}
