@@ -13,3 +13,6 @@ logs/*
 .worktrees/
 .superpowers/
 data/news_cache/
+.venv/
+*.bak
+*.bak.*
