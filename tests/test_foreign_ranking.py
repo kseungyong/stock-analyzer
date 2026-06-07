@@ -33,6 +33,14 @@ def _tmp_settings(tmp_path, monkeypatch):
     yield settings_path
 
 
+@pytest.fixture
+def _tmp_overlay(tmp_path, monkeypatch):
+    from src import universe
+    overlay_path = tmp_path / "foreign_ranking.yaml"
+    monkeypatch.setattr(universe, "OVERLAY_PATH", overlay_path)
+    yield overlay_path
+
+
 class TestRankingRow:
     def test_parse_kis_response(self):
         raw = {
@@ -102,7 +110,10 @@ class TestDB:
 
 
 class TestUniverseFollow:
-    def test_push_preserves_user_entries(self, _tmp_db, _tmp_settings):
+    def test_push_writes_overlay_and_skips_user_entries(
+        self, _tmp_db, _tmp_settings, _tmp_overlay,
+    ):
+        from src import universe
         snap = date_cls(2026, 6, 1)
         # 가짜 ranking — 005930 (사용자가 이미 등록), 034220 (신규)
         fr.save_snapshot(snap, [
@@ -110,51 +121,52 @@ class TestUniverseFollow:
             fr.RankingRow("034220", "LG디스플레이", 0, 500, 0, 0, 0, 0),
         ])
         union = fr.compute_union_top(snap, n=10)
-        removed, added = fr.push_to_settings(union)
+        removed, added = fr.push_to_overlay(union)
 
+        # overlay 파일에는 034220 만 (사용자 등록 005930 은 제외)
+        overlay = universe.load_overlay()
+        overlay_symbols = {s["symbol"]: s for s in overlay["korea"]}
+        assert "034220.KS" in overlay_symbols
+        assert overlay_symbols["034220.KS"]["source"] == fr._SOURCE_TAG
+        assert "005930.KS" not in overlay_symbols
+        assert added == 1
+
+        # settings.yaml 은 전혀 수정되지 않음 (사용자 종목 그대로)
         cfg = yaml.safe_load(_tmp_settings.read_text(encoding="utf-8"))
-        symbols = {s["symbol"]: s for s in cfg["stocks"]["korea"]}
+        user_symbols = {s["symbol"] for s in cfg["stocks"]["korea"]}
+        assert user_symbols == {"005930.KS", "000660.KS"}
 
-        # 005930 은 사용자 등록 — source 마커 없이 보존
-        assert "005930.KS" in symbols
-        assert "source" not in symbols["005930.KS"]
-        assert symbols["005930.KS"]["name"] == "삼성전자"
+        # apply_overlay 머지 결과 — 사용자 + overlay 합집합
+        merged = universe.apply_overlay(cfg)
+        merged_symbols = {s["symbol"] for s in merged["stocks"]["korea"]}
+        assert merged_symbols == {"005930.KS", "000660.KS", "034220.KS"}
 
-        # 034220 신규 — source=foreign_ranking 마커
-        assert "034220.KS" in symbols
-        assert symbols["034220.KS"]["source"] == fr._SOURCE_TAG
-
-        # 기존 사용자 SK하이닉스 — ranking 에 없지만 보존
-        assert "000660.KS" in symbols
-        assert added == 1  # 034220 만 신규
-
-    def test_push_replaces_old_foreign_ranking_entries(
-        self, _tmp_db, _tmp_settings,
+    def test_push_replaces_old_overlay_entries(
+        self, _tmp_db, _tmp_settings, _tmp_overlay,
     ):
-        # settings 에 이전 ranking 종목 미리 박아두기
-        cfg = yaml.safe_load(_tmp_settings.read_text(encoding="utf-8"))
-        cfg["stocks"]["korea"].append({
-            "symbol": "999999.KS", "name": "OldRanking",
-            "source": fr._SOURCE_TAG,
-        })
-        _tmp_settings.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+        from src import universe
+        # overlay 에 이전 ranking 종목 미리 박아두기
+        universe.write_overlay({"korea": [
+            {"symbol": "999999.KS", "name": "OldRanking", "source": fr._SOURCE_TAG},
+        ]})
 
         # 새 ranking — 999999 는 없음, 034220 만
         snap = date_cls(2026, 6, 1)
         fr.save_snapshot(snap, [
             fr.RankingRow("034220", "LG디스플레이", 0, 500, 0, 0, 0, 0),
         ])
-        removed, added = fr.push_to_settings(fr.compute_union_top(snap, n=10))
+        removed, added = fr.push_to_overlay(fr.compute_union_top(snap, n=10))
 
-        cfg2 = yaml.safe_load(_tmp_settings.read_text(encoding="utf-8"))
-        symbols = [s["symbol"] for s in cfg2["stocks"]["korea"]]
-        # 999999 제거됨
-        assert "999999.KS" not in symbols
-        # 034220 추가됨
-        assert "034220.KS" in symbols
-        # 사용자 등록 보존
-        assert "005930.KS" in symbols and "000660.KS" in symbols
+        overlay_symbols = [s["symbol"] for s in universe.load_overlay()["korea"]]
+        # 999999 제거됨 (전체 교체), 034220 추가됨
+        assert "999999.KS" not in overlay_symbols
+        assert "034220.KS" in overlay_symbols
         assert removed == 1 and added == 1
+
+        # settings.yaml 사용자 등록 보존
+        cfg = yaml.safe_load(_tmp_settings.read_text(encoding="utf-8"))
+        user_symbols = {s["symbol"] for s in cfg["stocks"]["korea"]}
+        assert user_symbols == {"005930.KS", "000660.KS"}
 
     def test_compute_union_dedupe_across_investors(self, _tmp_db):
         snap = date_cls(2026, 6, 1)
