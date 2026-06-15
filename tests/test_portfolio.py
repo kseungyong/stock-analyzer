@@ -56,6 +56,14 @@ def test_invalid_qty_raises():
         p.add_holding("admin", "AAPL", 150.0, -5)
 
 
+def test_add_holding_preserves_fractional_qty():
+    # 미국 fractional shares — 1.5 주가 1.0 으로 절삭되면 안 됨.
+    p.add_holding("admin", "AAPL", avg_price=190.5, qty=1.5)
+    rows = p.list_holdings("admin")
+    assert len(rows) == 1
+    assert rows[0]["qty"] == 1.5   # int 절삭되면 1.0 으로 실패
+
+
 def test_remove_existing_returns_true():
     p.add_holding("admin", "AAPL", 150.0, 10)
     assert p.remove_holding("admin", "AAPL") is True
