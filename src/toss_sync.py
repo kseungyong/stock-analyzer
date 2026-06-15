@@ -53,12 +53,8 @@ def _to_float(v) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
-    """토스 holdings 로 portfolio 전체 미러링.
-
-    Returns: {added, updated, removed, skipped, failed, target_count}
-    Raises: SyncAborted (50% 삭제 가드, TOSS_SYNC_FORCE=1 로 우회)
-    """
+def _build_target(holdings: list[dict]) -> tuple[dict[str, tuple[float, float]], int]:
+    """holdings → ({sa_symbol: (avg, qty)}, skipped_count). qty>0 & avg>0 & 변환가능만."""
     target: dict[str, tuple[float, float]] = {}
     skipped = 0
     for h in holdings:
@@ -71,6 +67,16 @@ def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
                         h.get("symbol"), h.get("quantity"), h.get("averagePurchasePrice"))
             continue
         target[sym] = (avg, qty)
+    return target, skipped
+
+
+def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
+    """토스 holdings 로 portfolio 전체 미러링.
+
+    Returns: {added, updated, removed, skipped, failed, target_count}
+    Raises: SyncAborted (50% 삭제 가드, TOSS_SYNC_FORCE=1 로 우회)
+    """
+    target, skipped = _build_target(holdings)
 
     current = {r["symbol"] for r in portfolio_db.list_holdings(username)}
     to_remove = current - target.keys()
@@ -128,16 +134,7 @@ def run_sync(username: str, *, dry_run: bool = False,
 
     if dry_run:
         # mirror 대신 diff 만 계산 — DB 무변경
-        target = {}
-        skipped = 0
-        for h in holdings:
-            sym = _to_sa_symbol(h)
-            qty = _to_float(h.get("quantity"))
-            avg = _to_float(h.get("averagePurchasePrice"))
-            if sym is None or qty is None or avg is None or qty <= 0 or avg <= 0:
-                skipped += 1
-                continue
-            target[sym] = (avg, qty)
+        target, skipped = _build_target(holdings)
         current = {r["symbol"] for r in portfolio_db.list_holdings(username)}
         return {"dry_run": True, "target_count": len(target), "skipped": skipped,
                 "would_add": sorted(target.keys() - current),

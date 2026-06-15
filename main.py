@@ -656,6 +656,10 @@ def main():
         user = args.user or os.environ.get("TOSS_SYNC_USERNAME", "admin")
         try:
             result = toss_sync.run_sync(user, dry_run=args.dry_run)
+            if result.get("dry_run"):
+                print(f"[dry-run] 대상 {result['target_count']}종목 · 건너뜀 {result['skipped']}")
+                print(f"  추가 예정: {result['would_add']}")
+                print(f"  제거 예정: {result['would_remove']}")
             logger.info("toss-sync 완료 (user=%s): %s", user, result)
         except toss_sync.SyncAborted as e:
             logger.warning("toss-sync 중단: %s", e)
