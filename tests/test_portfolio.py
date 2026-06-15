@@ -397,3 +397,42 @@ def test_seed_idempotent_does_not_duplicate(tmp_path, monkeypatch):
     p.init_db()
     txs2 = p.list_transactions("admin")
     assert len(txs1) == len(txs2)
+
+
+# --- sync meta (마지막 동기화 시각) ------------------------------------------
+
+def test_get_last_sync_none_when_absent():
+    assert p.get_last_sync("admin", "toss") is None
+
+
+def test_record_and_get_sync():
+    p.record_sync("admin", "toss", ts=1700000000)
+    assert p.get_last_sync("admin", "toss") == 1700000000
+
+
+def test_record_sync_default_ts_is_now():
+    before = int(time.time())
+    p.record_sync("admin", "toss")
+    after = int(time.time())
+    got = p.get_last_sync("admin", "toss")
+    assert got is not None and before <= got <= after
+
+
+def test_record_sync_upsert_overwrites():
+    p.record_sync("admin", "toss", ts=1000)
+    p.record_sync("admin", "toss", ts=2000)
+    assert p.get_last_sync("admin", "toss") == 2000
+
+
+def test_sync_meta_isolated_by_username():
+    p.record_sync("admin", "toss", ts=1000)
+    p.record_sync("shnoh", "toss", ts=2000)
+    assert p.get_last_sync("admin", "toss") == 1000
+    assert p.get_last_sync("shnoh", "toss") == 2000
+
+
+def test_sync_meta_isolated_by_source():
+    p.record_sync("admin", "toss", ts=1000)
+    p.record_sync("admin", "kis", ts=2000)
+    assert p.get_last_sync("admin", "toss") == 1000
+    assert p.get_last_sync("admin", "kis") == 2000

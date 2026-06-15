@@ -151,6 +151,7 @@ def test_run_sync_dry_run_no_db_change(_pf, _krx_stub, monkeypatch):
     res = ts.run_sync("admin", dry_run=True)
     assert res["target_count"] == 1
     assert _pf.list_holdings("admin") == []   # dry_run → DB 무변경
+    assert _pf.get_last_sync("admin", "toss") is None   # dry_run → 시각 미기록
 
 
 def test_run_sync_aborts_on_empty_accounts(_pf, _krx_stub, monkeypatch):
@@ -167,3 +168,4 @@ def test_run_sync_applies(_pf, _krx_stub, monkeypatch):
     res = ts.run_sync("admin")
     assert res["added"] == 1
     assert {r["symbol"] for r in _pf.list_holdings("admin")} == {"005930.KS"}
+    assert _pf.get_last_sync("admin", "toss") is not None   # 성공 → 시각 기록

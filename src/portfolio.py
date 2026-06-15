@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS portfolio_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_portfolio_tx_user_symbol_ts
     ON portfolio_transactions(username, symbol, ts);
+
+CREATE TABLE IF NOT EXISTS portfolio_sync_meta (
+    username   TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    synced_at  INTEGER NOT NULL,
+    PRIMARY KEY (username, source)
+);
 """
 
 # 마이그레이션 시 username 미보유 row 들을 이 사용자에게 할당
@@ -506,6 +513,42 @@ def record_adjust(
                 conn.execute("ROLLBACK")
                 raise
             return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Sync meta — 외부 소스(토스 등) 마지막 동기화 시각
+# ---------------------------------------------------------------------------
+
+def record_sync(username: str, source: str, ts: int | None = None) -> None:
+    """동기화 성공 시각 기록 (UPSERT). ts None 이면 현재 시각."""
+    if ts is None:
+        ts = int(time.time())
+    with _writer_lock:
+        with closing(_connect()) as conn:
+            conn.execute("BEGIN")
+            try:
+                conn.execute(
+                    """INSERT INTO portfolio_sync_meta(username, source, synced_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(username, source) DO UPDATE SET
+                         synced_at = excluded.synced_at""",
+                    (username, source, int(ts)),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+
+def get_last_sync(username: str, source: str) -> int | None:
+    """마지막 동기화 시각(unix epoch) 반환. 이력 없으면 None."""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT synced_at FROM portfolio_sync_meta "
+            "WHERE username = ? AND source = ?",
+            (username, source),
+        ).fetchone()
+    return int(row[0]) if row else None
 
 
 def list_transactions(

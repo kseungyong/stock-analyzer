@@ -140,4 +140,7 @@ def run_sync(username: str, *, dry_run: bool = False,
                 "would_add": sorted(target.keys() - current),
                 "would_remove": sorted(current - target.keys())}
 
-    return mirror_to_portfolio(username, holdings)
+    result = mirror_to_portfolio(username, holdings)
+    # 성공 시에만 마지막 동기화 시각 기록 (SyncAborted/예외 시 미기록)
+    portfolio_db.record_sync(username, "toss")
+    return result

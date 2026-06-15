@@ -3091,12 +3091,20 @@ def portfolio_view():
       {_market_block("us", "🇺🇸 미국")}
     </div>"""
 
+    _last_toss_sync = portfolio_db.get_last_sync(user, "toss")
+    _last_sync_label = (
+        f'<span style="font-size:0.72rem;color:var(--slate-500);margin-left:8px;">'
+        f'마지막 동기화: {_format_kst(_last_toss_sync)}</span>'
+        if _last_toss_sync is not None else
+        '<span style="font-size:0.72rem;color:var(--slate-500);margin-left:8px;">'
+        '동기화 이력 없음</span>'
+    )
     sync_form = (
         f'<form method="post" action="/portfolio/sync" style="display:inline;">'
         f'{_csrf_input()}'
         f'<button type="submit" class="badge" '
         f'onclick="return confirm(\'토스 계좌 보유종목으로 포트폴리오를 덮어씁니다. 진행할까요?\')">'
-        f'📥 토스 동기화</button></form>'
+        f'📥 토스 동기화</button>{_last_sync_label}</form>'
     )
 
     add_form = f"""
