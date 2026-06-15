@@ -13,3 +13,7 @@ logs/*
 .worktrees/
 .superpowers/
 data/news_cache/
+.venv/
+*.bak
+*.bak.*
+config/foreign_ranking.yaml

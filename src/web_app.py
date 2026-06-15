@@ -193,13 +193,19 @@ def _trim_jobs() -> None:
 
 def _load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    # foreign_ranking 자동 종목(overlay) 머지 — settings.yaml 은 사용자 종목만 보관
+    from src.universe import apply_overlay
+    return apply_overlay(config)
 
 
 def _save_config(config: dict) -> None:
+    # overlay(foreign_ranking) 종목은 settings.yaml 에 쓰지 않음 (별도 파일로 분리)
+    from src.universe import strip_overlay
     with _config_lock:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            yaml.dump(strip_overlay(config), f, allow_unicode=True,
+                      default_flow_style=False)
 
 
 def _get_all_stocks(config: dict) -> list[dict]:

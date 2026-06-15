@@ -73,6 +73,10 @@ def find_candidates(config: dict, held_symbols: set[str]) -> list[dict]:
     stocks_by_market = config.get("stocks", {})
     for market, group in stocks_by_market.items():
         for stock in group:
+            # foreign_ranking overlay 종목은 매일 cron 이 ranking 기준으로 전체 재구성 —
+            # cleanup 대상에서 제외 (settings.yaml 에도 존재하지 않아 제거 불가).
+            if stock.get("source") == "foreign_ranking":
+                continue
             symbol = stock["symbol"]
             name = stock["name"]
             is_held = symbol in held_symbols

@@ -65,7 +65,10 @@ def _next_trading_day_unix(last_index, symbol: str) -> int:
 
 def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    # foreign_ranking 자동 종목(overlay) 머지 — settings.yaml 은 사용자 종목만 보관
+    from src.universe import apply_overlay
+    return apply_overlay(config)
 
 
 # 모듈 로드 시점에 1회 — DB 파일/스키마 보장

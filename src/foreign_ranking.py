@@ -1,7 +1,9 @@
 """외인/기관/연기금 순매수 ranking 발굴 + universe push.
 
 KIS API foreign-institution-total → 매일 30 종목 (합산 순매수 상위) →
-SQLite 누적 (5일 누적 계산) → settings.yaml.stocks.korea 에 source=foreign_ranking 으로 push.
+SQLite 누적 (5일 누적 계산) → config/foreign_ranking.yaml (overlay) 에
+source=foreign_ranking 으로 push. settings.yaml 은 건드리지 않으므로 매일 갱신이
+git working tree 를 더럽히지 않는다 (src.universe 참고).
 
 스케줄: 매일 16:00 KST (장 마감 30분 후), 후속 16:30 korea-analysis 가 자동 분석.
 """
@@ -184,43 +186,41 @@ def compute_union_top(snap: date_cls, n: int = 10) -> list[tuple[str, str]]:
     return list(seen.items())
 
 
-def push_to_settings(symbols: list[tuple[str, str]]) -> tuple[int, int]:
-    """settings.yaml.stocks.korea 에 source=foreign_ranking 으로 push.
+def push_to_overlay(symbols: list[tuple[str, str]]) -> tuple[int, int]:
+    """config/foreign_ranking.yaml (overlay) 에 source=foreign_ranking 으로 push.
 
-    기존 source=foreign_ranking 항목은 모두 제거 후 새로 추가 (전체 교체).
-    사용자가 직접 등록한 종목 (source 필드 없음) 은 보존.
+    overlay 는 매번 전체 교체. settings.yaml (사용자 등록) 은 읽기 전용으로만 참조하여
+    이미 사용자가 직접 등록한 symbol 은 overlay 에서 제외 (중복 방지).
+    settings.yaml 자체는 수정하지 않는다.
 
-    Returns: (제거된 항목 수, 추가된 항목 수)
+    Returns: (이전 overlay 종목 수, 새 overlay 종목 수)
     """
-    if not _SETTINGS_PATH.exists():
-        raise FileNotFoundError(_SETTINGS_PATH)
+    from src import universe
 
-    config = yaml.safe_load(_SETTINGS_PATH.read_text(encoding="utf-8")) or {}
-    korea = config.setdefault("stocks", {}).setdefault("korea", [])
+    user_symbols: set[str] = set()
+    if _SETTINGS_PATH.exists():
+        cfg = yaml.safe_load(_SETTINGS_PATH.read_text(encoding="utf-8")) or {}
+        user_symbols = {
+            s["symbol"] for s in cfg.get("stocks", {}).get("korea", [])
+        }
 
-    kept = [s for s in korea if s.get("source") != _SOURCE_TAG]
-    user_existing_symbols = {s["symbol"] for s in kept}
-    removed = len(korea) - len(kept)
+    removed = len(universe.load_overlay().get("korea", []))
 
-    added = 0
+    entries: list[dict] = []
     for symbol_6, name in symbols:
         ks_symbol = f"{symbol_6}.KS"  # KIS 응답은 6자리, stock-analyzer 는 .KS suffix
-        if ks_symbol in user_existing_symbols:
-            # 이미 사용자가 직접 등록 — source 마커 안 붙이고 보존
+        if ks_symbol in user_symbols:
+            # 이미 사용자가 직접 등록 — overlay 에 중복 추가 안 함
             continue
-        kept.append({
+        entries.append({
             "symbol": ks_symbol,
             "name": name,
             "source": _SOURCE_TAG,
         })
-        added += 1
 
-    config["stocks"]["korea"] = kept
-    _SETTINGS_PATH.write_text(
-        yaml.dump(config, allow_unicode=True, sort_keys=False, default_flow_style=False),
-        encoding="utf-8",
-    )
-    logger.info("foreign_ranking universe push — removed=%d added=%d", removed, added)
+    universe.write_overlay({"korea": entries})
+    added = len(entries)
+    logger.info("foreign_ranking overlay push — removed=%d added=%d", removed, added)
     return removed, added
 
 
@@ -233,7 +233,7 @@ def run_daily(snap: date_cls | None = None) -> dict:
     rows = fetch_today()
     saved = save_snapshot(snap, rows)
     union = compute_union_top(snap, n=10)
-    removed, added = push_to_settings(union)
+    removed, added = push_to_overlay(union)
     return {
         "snap_date": snap.isoformat(),
         "fetched": len(rows),
