@@ -2819,7 +2819,8 @@ def _format_signed(value: float | None, market: str | None,
 def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str],
                     dart_summaries: dict | None = None) -> str:
     sym = h["symbol"]
-    name = name_map.get(sym, sym)
+    # 종목명 fallback: settings.yaml > 토스 sync name(portfolio.name) > symbol
+    name = name_map.get(sym) or h.get("name") or sym
     market = h.get("market") or _market_of(sym)
     avg = h["avg_price"]
     qty = h["qty"]

@@ -25,6 +25,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS portfolio (
     username   TEXT NOT NULL,
     symbol     TEXT NOT NULL,
+    name       TEXT,
     avg_price  REAL NOT NULL,
     qty        REAL NOT NULL DEFAULT 0,
     added_at   INTEGER NOT NULL,
@@ -99,6 +100,20 @@ def _migrate_to_multiuser(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migrate_add_name_column(conn: sqlite3.Connection) -> None:
+    """기존 portfolio 테이블에 name 컬럼 추가 (멱등).
+
+    SQLite 는 ADD COLUMN 을 지원하므로 rename-recreate 불필요.
+    name 컬럼 이미 있거나 테이블 없으면 no-op.
+    """
+    cur = conn.execute("PRAGMA table_info(portfolio)")
+    cols = {row[1] for row in cur.fetchall()}
+    if not cols or "name" in cols:
+        return  # 신규 (executescript 가 name 포함 스키마 생성) 또는 이미 있음
+    logger.info("portfolio name 컬럼 마이그레이션 — ALTER ADD COLUMN")
+    conn.execute("ALTER TABLE portfolio ADD COLUMN name TEXT")
+
+
 def _seed_transactions_from_existing(conn: sqlite3.Connection) -> None:
     """portfolio_transactions 가 비어 있고 portfolio 에 데이터 있으면 seed BUY 생성.
 
@@ -135,6 +150,7 @@ def init_db() -> None:
         with closing(_connect()) as conn:
             _migrate_to_multiuser(conn)
             conn.executescript(_SCHEMA)
+            _migrate_add_name_column(conn)
             _seed_transactions_from_existing(conn)
     logger.info("portfolio DB 초기화 완료: %s", _DB_PATH)
 
@@ -148,9 +164,12 @@ def _validate(avg_price: float, qty: float) -> None:
 
 def add_holding(
     username: str, symbol: str, avg_price: float, qty: float,
-    notes: str | None = None,
+    name: str | None = None, notes: str | None = None,
 ) -> bool:
-    """추가 또는 갱신. 새로 추가됐으면 True, 기존 갱신이면 False."""
+    """추가 또는 갱신. 새로 추가됐으면 True, 기존 갱신이면 False.
+
+    name=None 으로 호출 시 기존 name 보존 (COALESCE) — 수동 등록 종목명 보호.
+    """
     _validate(avg_price, qty)
     now = int(time.time())
     with _writer_lock:
@@ -162,13 +181,14 @@ def add_holding(
             conn.execute("BEGIN")
             try:
                 conn.execute(
-                    """INSERT INTO portfolio(username, symbol, avg_price, qty, added_at, notes)
-                       VALUES (?, ?, ?, ?, ?, ?)
+                    """INSERT INTO portfolio(username, symbol, name, avg_price, qty, added_at, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(username, symbol) DO UPDATE SET
+                         name      = COALESCE(excluded.name, portfolio.name),
                          avg_price = excluded.avg_price,
                          qty       = excluded.qty,
                          notes     = excluded.notes""",
-                    (username, symbol, float(avg_price), float(qty), now, notes),
+                    (username, symbol, name, float(avg_price), float(qty), now, notes),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -241,13 +261,13 @@ def update_holding(
 def list_holdings(username: str) -> list[dict]:
     with closing(_connect()) as conn:
         rows = conn.execute(
-            "SELECT symbol, avg_price, qty, added_at, notes "
+            "SELECT symbol, avg_price, qty, added_at, notes, name "
             "FROM portfolio WHERE username = ? ORDER BY symbol",
             (username,),
         ).fetchall()
     return [
         {"symbol": r[0], "avg_price": float(r[1]), "qty": float(r[2]),
-         "added_at": int(r[3]), "notes": r[4]}
+         "added_at": int(r[3]), "notes": r[4], "name": r[5]}
         for r in rows
     ]
 
@@ -273,7 +293,7 @@ def list_holdings_with_pnl(username: str) -> list[dict]:
                       c.signal_value, c.signal_score,
                       c.bnf_signal_value, c.bnf_signal_score,
                       c.pattern_json, c.pattern_signal, c.pattern_score,
-                      c.generated_at, c.rel_perf_json
+                      c.generated_at, c.rel_perf_json, p.name
                FROM portfolio p
                LEFT JOIN analysis_cache c ON p.symbol = c.cache_key
                WHERE p.username = ?
@@ -307,6 +327,7 @@ def list_holdings_with_pnl(username: str) -> list[dict]:
             "pattern_score": r[13],
             "generated_at": r[14],
             "rel_perf_json": r[15] if len(r) > 15 else None,
+            "name": r[16] if len(r) > 16 else None,
             "pnl_pct": pnl_pct,
             "pnl_abs": pnl_abs,
         })

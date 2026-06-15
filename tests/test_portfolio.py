@@ -24,7 +24,7 @@ def _isolated_db(monkeypatch, tmp_path):
 # --- 기본 CRUD (사용자: admin) -----------------------------------------------
 
 def test_add_new_holding_returns_true():
-    new = p.add_holding("admin", "AAPL", 150.50, 10, "tech stock")
+    new = p.add_holding("admin", "AAPL", 150.50, 10, notes="tech stock")
     assert new is True
     holdings = p.list_holdings("admin")
     assert len(holdings) == 1
@@ -36,7 +36,7 @@ def test_add_new_holding_returns_true():
 
 def test_add_existing_returns_false_and_updates():
     p.add_holding("admin", "AAPL", 150.0, 10)
-    new = p.add_holding("admin", "AAPL", 160.0, 20, "updated")
+    new = p.add_holding("admin", "AAPL", 160.0, 20, notes="updated")
     assert new is False
     holdings = p.list_holdings("admin")
     assert holdings[0]["avg_price"] == 160.0
@@ -64,6 +64,60 @@ def test_add_holding_preserves_fractional_qty():
     assert rows[0]["qty"] == 1.5   # int 절삭되면 1.0 으로 실패
 
 
+# --- name 컬럼 (토스 sync 종목명 표시) --------------------------------------
+
+def test_add_holding_stores_and_returns_name():
+    p.add_holding("admin", "229200.KS", 12000.0, 3, name="KODEX 코스닥150")
+    h = p.list_holdings("admin")[0]
+    assert h["name"] == "KODEX 코스닥150"
+    pnl = p.get_holding_with_pnl("admin", "229200.KS")
+    assert pnl["name"] == "KODEX 코스닥150"
+
+
+def test_add_holding_none_name_preserves_existing():
+    # 토스 name 으로 먼저 저장 후, name 없이(=None) 재호출 시 기존 name 보존 (COALESCE).
+    p.add_holding("admin", "AAPL", 150.0, 10, name="Apple Inc.")
+    p.add_holding("admin", "AAPL", 160.0, 20)  # name 미지정 → 기존 보존
+    h = p.list_holdings("admin")[0]
+    assert h["avg_price"] == 160.0
+    assert h["name"] == "Apple Inc."
+
+
+def test_add_holding_default_name_is_none():
+    p.add_holding("admin", "AAPL", 150.0, 10)
+    assert p.list_holdings("admin")[0]["name"] is None
+
+
+def test_migration_adds_name_column_to_legacy_db(tmp_path, monkeypatch):
+    # name 컬럼이 없는 기존 (multiuser) DB → init_db 멱등 ALTER 로 name 추가.
+    db_path = tmp_path / "legacy.db"
+    monkeypatch.setattr(p, "_DB_PATH", db_path)
+    monkeypatch.setattr(ac, "_DB_PATH", db_path)
+    # name 컬럼 없는 portfolio 테이블 수동 생성 (구 스키마)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """CREATE TABLE portfolio (
+               username TEXT NOT NULL, symbol TEXT NOT NULL,
+               avg_price REAL NOT NULL, qty REAL NOT NULL DEFAULT 0,
+               added_at INTEGER NOT NULL, notes TEXT,
+               PRIMARY KEY (username, symbol));"""
+    )
+    conn.execute(
+        "INSERT INTO portfolio VALUES ('admin','AAPL',150.0,10,?,NULL)",
+        (int(time.time()),),
+    )
+    conn.commit()
+    conn.close()
+    # 마이그레이션 — name 컬럼 추가, 기존 row 보존
+    p.init_db()
+    cols = {r[1] for r in sqlite3.connect(db_path).execute("PRAGMA table_info(portfolio)")}
+    assert "name" in cols
+    h = p.list_holdings("admin")[0]
+    assert h["symbol"] == "AAPL" and h["name"] is None
+    # 멱등 — 다시 호출해도 에러 없음
+    p.init_db()
+
+
 def test_remove_existing_returns_true():
     p.add_holding("admin", "AAPL", 150.0, 10)
     assert p.remove_holding("admin", "AAPL") is True
@@ -75,7 +129,7 @@ def test_remove_missing_returns_false():
 
 
 def test_update_partial():
-    p.add_holding("admin", "AAPL", 150.0, 10, "old note")
+    p.add_holding("admin", "AAPL", 150.0, 10, notes="old note")
     assert p.update_holding("admin", "AAPL", avg_price=155.0) is True
     h = p.list_holdings("admin")[0]
     assert h["avg_price"] == 155.0
@@ -165,8 +219,8 @@ def test_user_a_cannot_update_user_b_holding():
 
 
 def test_same_symbol_different_users_independent():
-    p.add_holding("admin", "AAPL", 150.0, 10, "admin note")
-    p.add_holding("shnoh", "AAPL", 200.0, 5, "shnoh note")
+    p.add_holding("admin", "AAPL", 150.0, 10, notes="admin note")
+    p.add_holding("shnoh", "AAPL", 200.0, 5, notes="shnoh note")
     admin_h = p.list_holdings("admin")[0]
     shnoh_h = p.list_holdings("shnoh")[0]
     assert admin_h["avg_price"] == 150.0 and admin_h["qty"] == 10

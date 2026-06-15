@@ -53,9 +53,11 @@ def _to_float(v) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def _build_target(holdings: list[dict]) -> tuple[dict[str, tuple[float, float]], int]:
-    """holdings → ({sa_symbol: (avg, qty)}, skipped_count). qty>0 & avg>0 & 변환가능만."""
-    target: dict[str, tuple[float, float]] = {}
+def _build_target(
+    holdings: list[dict],
+) -> tuple[dict[str, tuple[float, float, str]], int]:
+    """holdings → ({sa_symbol: (avg, qty, name)}, skipped_count). qty>0 & avg>0 & 변환가능만."""
+    target: dict[str, tuple[float, float, str]] = {}
     skipped = 0
     for h in holdings:
         sym = _to_sa_symbol(h)
@@ -66,7 +68,8 @@ def _build_target(holdings: list[dict]) -> tuple[dict[str, tuple[float, float]],
             logger.info("skip holding: symbol=%s qty=%s avg=%s",
                         h.get("symbol"), h.get("quantity"), h.get("averagePurchasePrice"))
             continue
-        target[sym] = (avg, qty)
+        name = str(h.get("name", "") or "")  # 토스 종목명 (없으면 빈 문자열)
+        target[sym] = (avg, qty, name)
     return target, skipped
 
 
@@ -93,9 +96,9 @@ def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
         logger.warning("TOSS_SYNC_FORCE — 50%% 가드 우회, %d 종목 제거", len(to_remove))
 
     added = updated = removed = failed = 0
-    for sym, (avg, qty) in target.items():
+    for sym, (avg, qty, name) in target.items():
         try:
-            is_new = portfolio_db.add_holding(username, sym, avg, qty)
+            is_new = portfolio_db.add_holding(username, sym, avg, qty, name=name)
             if is_new:
                 added += 1
             else:

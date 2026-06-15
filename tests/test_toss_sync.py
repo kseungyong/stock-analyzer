@@ -43,9 +43,9 @@ def _pf(tmp_path, monkeypatch):
     return pf
 
 
-def _h(symbol, country, qty, avg):
+def _h(symbol, country, qty, avg, name=""):
     return {"symbol": symbol, "marketCountry": country, "quantity": str(qty),
-            "averagePurchasePrice": str(avg)}
+            "averagePurchasePrice": str(avg), "name": name}
 
 
 def test_mirror_adds_and_updates(_pf, _krx_stub):
@@ -59,6 +59,27 @@ def test_mirror_adds_and_updates(_pf, _krx_stub):
     assert "AAPL" in syms and syms["AAPL"]["qty"] == 1.5
     assert "000660.KS" not in syms          # 토스에 없으니 제거
     assert res["added"] == 2 and res["removed"] == 1
+
+
+def test_mirror_stores_toss_name(_pf, _krx_stub):
+    # 토스 holding 의 name 필드가 portfolio 에 저장돼야 함 (229200 등 종목명 공백 방지).
+    ts.mirror_to_portfolio("admin", [
+        _h("229200", "KR", 3, 12000, name="KODEX 코스닥150"),
+        _h("AAPL", "US", 1.5, 190.5, name="Apple Inc."),
+    ])
+    syms = {r["symbol"]: r for r in _pf.list_holdings("admin")}
+    assert syms["229200.KS"]["name"] == "KODEX 코스닥150"
+    assert syms["AAPL"]["name"] == "Apple Inc."
+
+
+def test_mirror_missing_name_stores_empty(_pf, _krx_stub):
+    # name 필드 없는 holding 도 깨지지 않고 빈 문자열로 저장.
+    ts.mirror_to_portfolio("admin", [
+        {"symbol": "005930", "marketCountry": "KR",
+         "quantity": "10", "averagePurchasePrice": "70000"},
+    ])
+    h = _pf.list_holdings("admin")[0]
+    assert h["name"] == ""
 
 
 def test_mirror_skips_zero_and_negative(_pf, _krx_stub):
@@ -117,10 +138,10 @@ def test_mirror_isolates_add_failure(_pf, _krx_stub, monkeypatch):
     # 특정 symbol 에서 add_holding 이 예외 → 그 종목만 failed, 나머지는 정상 added
     real_add = _pf.add_holding
 
-    def flaky_add(username, sym, avg, qty):
+    def flaky_add(username, sym, avg, qty, name=None):
         if sym == "005930.KS":
             raise RuntimeError("database is locked")
-        return real_add(username, sym, avg, qty)
+        return real_add(username, sym, avg, qty, name=name)
 
     monkeypatch.setattr(ts.portfolio_db, "add_holding", flaky_add)
     res = ts.mirror_to_portfolio("admin", [
