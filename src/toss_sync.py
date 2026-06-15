@@ -5,6 +5,7 @@ toss_client(외부 I/O) 와 분리된 비즈니스 로직. 토스 API 없이 단
 from __future__ import annotations
 
 import logging
+import math
 import os
 
 from src import portfolio as portfolio_db
@@ -45,15 +46,16 @@ class SyncAborted(RuntimeError):
 
 def _to_float(v) -> float | None:
     try:
-        return float(str(v).replace(",", "").strip())
+        f = float(str(v).replace(",", "").strip())
     except (ValueError, AttributeError):
         return None
+    return f if math.isfinite(f) else None
 
 
 def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
     """토스 holdings 로 portfolio 전체 미러링.
 
-    Returns: {added, updated, removed, skipped, target_count}
+    Returns: {added, updated, removed, skipped, failed, target_count}
     Raises: SyncAborted (50% 삭제 가드, TOSS_SYNC_FORCE=1 로 우회)
     """
     target: dict[str, tuple[float, float]] = {}
@@ -83,18 +85,26 @@ def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
             )
         logger.warning("TOSS_SYNC_FORCE — 50%% 가드 우회, %d 종목 제거", len(to_remove))
 
-    added = updated = removed = 0
+    added = updated = removed = failed = 0
     for sym, (avg, qty) in target.items():
-        is_new = portfolio_db.add_holding(username, sym, avg, qty)
-        if is_new:
-            added += 1
-        else:
-            updated += 1
+        try:
+            is_new = portfolio_db.add_holding(username, sym, avg, qty)
+            if is_new:
+                added += 1
+            else:
+                updated += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("미러링 add 실패 — %s: %s", sym, e)
     for sym in to_remove:
-        if portfolio_db.remove_holding(username, sym):
-            removed += 1
+        try:
+            if portfolio_db.remove_holding(username, sym):
+                removed += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("미러링 remove 실패 — %s: %s", sym, e)
 
     result = {"added": added, "updated": updated, "removed": removed,
-              "skipped": skipped, "target_count": len(target)}
+              "skipped": skipped, "failed": failed, "target_count": len(target)}
     logger.info("미러링 완료 — %s", result)
     return result

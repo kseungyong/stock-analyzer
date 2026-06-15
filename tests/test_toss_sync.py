@@ -87,3 +87,47 @@ def test_mirror_force_bypasses_guard(_pf, _krx_stub, monkeypatch):
     monkeypatch.setenv("TOSS_SYNC_FORCE", "1")
     res = ts.mirror_to_portfolio("admin", [_h("005930", "KR", 1, 1000)])
     assert res["removed"] == 3
+
+
+# --- Fix B: _to_float 비유한수 차단 -----------------------------------------
+
+def test_to_float_rejects_nan_inf():
+    assert ts._to_float("nan") is None
+    assert ts._to_float("inf") is None
+    assert ts._to_float("-inf") is None
+    # 정상 값은 통과
+    assert ts._to_float("1,234.5") == 1234.5
+
+
+def test_mirror_skips_nan_qty(_pf, _krx_stub):
+    # nan qty 종목은 _to_float→None 으로 skip 되어 DB 에 저장 안 됨
+    res = ts.mirror_to_portfolio("admin", [
+        _h("005930", "KR", "nan", 70000),
+        _h("AAPL", "US", 1.5, 190.5),
+    ])
+    syms = {r["symbol"] for r in _pf.list_holdings("admin")}
+    assert "005930.KS" not in syms
+    assert "AAPL" in syms
+    assert res["skipped"] == 1 and res["added"] == 1
+
+
+# --- Fix A: apply 부분실패 격리 ----------------------------------------------
+
+def test_mirror_isolates_add_failure(_pf, _krx_stub, monkeypatch):
+    # 특정 symbol 에서 add_holding 이 예외 → 그 종목만 failed, 나머지는 정상 added
+    real_add = _pf.add_holding
+
+    def flaky_add(username, sym, avg, qty):
+        if sym == "005930.KS":
+            raise RuntimeError("database is locked")
+        return real_add(username, sym, avg, qty)
+
+    monkeypatch.setattr(ts.portfolio_db, "add_holding", flaky_add)
+    res = ts.mirror_to_portfolio("admin", [
+        _h("005930", "KR", 10, 70000),   # 쓰기 실패
+        _h("AAPL", "US", 1.5, 190.5),    # 정상
+    ])
+    syms = {r["symbol"] for r in _pf.list_holdings("admin")}
+    assert "005930.KS" not in syms      # 실패한 종목은 미저장
+    assert "AAPL" in syms               # 나머지는 진행
+    assert res["failed"] == 1 and res["added"] == 1
