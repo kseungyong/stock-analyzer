@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from deep_translator import GoogleTranslator
 from src.news_kr import fetch_news_kr
+from src.toss_client import TossClient
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,20 @@ def _candles_to_df(candles: list[dict]) -> pd.DataFrame:
     # tz-aware(+09:00) → tz-naive + 날짜 normalize (시각 제거, 일봉이므로 날짜만 유효)
     df.index = df.index.tz_localize(None).normalize()
     return df.sort_index()
+
+
+def _required_count(period_days: int) -> int:
+    """period_days(캘린더 일수) → 필요한 거래일 봉 수 추정. 영업일 비율 ~0.69 에 여유."""
+    return int(period_days * 0.75) + 10
+
+
+def _fetch_with_toss(symbol: str, period_days: int) -> pd.DataFrame:
+    """토스 candles 로 일봉 수집 → DataFrame. .KS/.KQ 는 6자리 코드로 변환."""
+    toss_symbol = _to_krx_code(symbol) if symbol.endswith((".KS", ".KQ")) else symbol
+    count = _required_count(period_days)
+    with TossClient() as client:
+        candles = client.fetch_candles(toss_symbol, interval="1d", count=count)
+    return _candles_to_df(candles)   # 빈 candles 면 ValueError
 
 
 def _fetch_with_fdr(symbol: str, start: datetime, end: datetime) -> pd.DataFrame:

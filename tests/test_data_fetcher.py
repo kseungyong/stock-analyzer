@@ -227,3 +227,45 @@ def test_candles_to_df_us_decimal_prices():
 def test_candles_to_df_empty_raises():
     with pytest.raises(ValueError):
         df_mod._candles_to_df([])
+
+
+def test_fetch_with_toss_strips_kr_suffix(monkeypatch):
+    captured = {}
+    class FakeClient:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def fetch_candles(self, symbol, interval="1d", count=200):
+            captured["symbol"] = symbol
+            captured["count"] = count
+            return [{"timestamp": "2026-06-15T00:00:00.000+09:00", "openPrice": "1",
+                     "highPrice": "1", "lowPrice": "1", "closePrice": "1", "volume": "1"}]
+    monkeypatch.setattr(df_mod, "TossClient", lambda: FakeClient())
+    df = df_mod._fetch_with_toss("005930.KS", period_days=365)
+    assert captured["symbol"] == "005930"        # .KS 제거
+    assert captured["count"] >= 250              # 365일 ≈ 최소 250 거래일분
+    assert not df.empty
+
+
+def test_fetch_with_toss_us_passthrough(monkeypatch):
+    captured = {}
+    class FakeClient:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def fetch_candles(self, symbol, interval="1d", count=200):
+            captured["symbol"] = symbol
+            return [{"timestamp": "2026-06-15T13:00:00.000+09:00", "openPrice": "1",
+                     "highPrice": "1", "lowPrice": "1", "closePrice": "1", "volume": "1"}]
+    monkeypatch.setattr(df_mod, "TossClient", lambda: FakeClient())
+    df_mod._fetch_with_toss("AAPL", period_days=365)
+    assert captured["symbol"] == "AAPL"          # 변환 없음
+
+
+def test_fetch_with_toss_empty_raises(monkeypatch):
+    class FakeClient:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def fetch_candles(self, symbol, interval="1d", count=200):
+            return []
+    monkeypatch.setattr(df_mod, "TossClient", lambda: FakeClient())
+    with pytest.raises(ValueError):
+        df_mod._fetch_with_toss("005930.KS", period_days=365)
