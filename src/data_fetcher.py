@@ -101,34 +101,36 @@ def _fetch_with_fdr(symbol: str, start: datetime, end: datetime) -> pd.DataFrame
 
 
 def fetch_stock_data(symbol: str, period_days: int = 365, retries: int = 2) -> pd.DataFrame:
-    """주가 데이터를 yfinance로 수집하고, 실패 시 FinanceDataReader로 폴백한다.
+    """주가 데이터를 토스 candles 로 수집하고, 실패 시 FinanceDataReader 로 폴백한다.
 
     Args:
         symbol: 종목 코드 (예: '005930.KS', 'AAPL')
         period_days: 수집할 과거 일수
-        retries: 실패 시 재시도 횟수
+        retries: 토스 실패 시 재시도 횟수
 
     Returns:
-        OHLCV 데이터프레임
+        OHLCV 데이터프레임 (Open/High/Low/Close/Volume, tz-naive 오름차순 index)
     """
     end = datetime.now()
     start = end - timedelta(days=period_days)
 
-    # 1차: yfinance 시도
+    # 1차: 토스 candles 시도
     for attempt in range(retries + 1):
         try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start, end=end)
+            df = _fetch_with_toss(symbol, period_days)
             if df.empty:
-                raise ValueError(f"No data found for {symbol}")
-            df.index = pd.to_datetime(df.index).tz_localize(None)
-            logger.info("데이터 수집 완료 [yfinance]: %s", symbol)
+                raise ValueError(f"토스 데이터 없음 {symbol}")
+            logger.info("데이터 수집 완료 [토스]: %s", symbol)
             return df
         except Exception as exc:
+            if "TOSS_CLIENT" in str(exc):
+                # 자격증명 미설정 — 재시도 무의미, 즉시 FDR 폴백 (CI/키 없는 환경)
+                logger.warning("토스 자격증명 미설정 [%s] — FDR 폴백", symbol)
+                break
             if attempt < retries:
                 time.sleep(1)
             else:
-                logger.warning("yfinance 실패 [%s]: %s — FinanceDataReader로 폴백", symbol, exc)
+                logger.warning("토스 실패 [%s]: %s — FinanceDataReader로 폴백", symbol, exc)
 
     # 2차: FinanceDataReader 폴백
     try:
@@ -137,7 +139,7 @@ def fetch_stock_data(symbol: str, period_days: int = 365, retries: int = 2) -> p
         return df
     except Exception as fdr_exc:
         raise ValueError(
-            f"yfinance 및 FinanceDataReader 모두 실패 [{symbol}]: {fdr_exc}"
+            f"토스 및 FinanceDataReader 모두 실패 [{symbol}]: {fdr_exc}"
         ) from fdr_exc
 
 
