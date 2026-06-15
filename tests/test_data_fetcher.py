@@ -191,3 +191,39 @@ class TestFetchNewsDispatch:
         fetch_news("AAPL")
         mock_ticker.assert_called_once_with("AAPL")
         mock_kr.assert_not_called()
+
+
+# --- _candles_to_df: 토스 candle 리스트 → yfinance 스타일 DataFrame ---
+from src import data_fetcher as df_mod  # noqa: E402
+
+
+def test_candles_to_df_converts_and_sorts():
+    # 토스는 최신순 — 변환 후 오름차순 정렬돼야 함
+    candles = [
+        {"timestamp": "2026-06-15T00:00:00.000+09:00", "openPrice": "337500",
+         "highPrice": "345000", "lowPrice": "334500", "closePrice": "337500",
+         "volume": "27018131", "currency": "KRW"},
+        {"timestamp": "2026-06-12T00:00:00.000+09:00", "openPrice": "310000",
+         "highPrice": "327500", "lowPrice": "300000", "closePrice": "327000",
+         "volume": "52941179", "currency": "KRW"},
+    ]
+    df = df_mod._candles_to_df(candles)
+    assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume"]
+    assert df.index.tz is None                      # tz-naive
+    assert list(df.index) == sorted(df.index)       # 오름차순
+    assert df["Close"].iloc[-1] == 337500.0         # 최신이 마지막
+    assert df["Open"].iloc[0] == 310000.0           # 과거가 처음
+    assert df["Close"].dtype == float
+
+
+def test_candles_to_df_us_decimal_prices():
+    candles = [{"timestamp": "2026-06-15T13:00:00.000+09:00", "openPrice": "293",
+                "highPrice": "294.34", "lowPrice": "290.45", "closePrice": "292.6",
+                "volume": "110158", "currency": "USD"}]
+    df = df_mod._candles_to_df(candles)
+    assert df["High"].iloc[0] == 294.34             # 소수점 보존
+
+
+def test_candles_to_df_empty_raises():
+    with pytest.raises(ValueError):
+        df_mod._candles_to_df([])

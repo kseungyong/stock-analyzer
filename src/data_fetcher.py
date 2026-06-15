@@ -53,6 +53,28 @@ def _to_krx_code(symbol: str) -> str:
     return symbol.split(".")[0]
 
 
+def _candles_to_df(candles: list[dict]) -> pd.DataFrame:
+    """토스 candle 리스트 → yfinance 스타일 DataFrame (Open/High/Low/Close/Volume).
+
+    index: timestamp → tz-naive, 날짜 normalize, 오름차순 정렬.
+    빈 입력은 ValueError (fetch_stock_data 가 폴백 트리거).
+    """
+    if not candles:
+        raise ValueError("토스 candles 비어있음")
+    idx = pd.to_datetime([c["timestamp"] for c in candles])
+    data = {
+        "Open": [float(c["openPrice"]) for c in candles],
+        "High": [float(c["highPrice"]) for c in candles],
+        "Low": [float(c["lowPrice"]) for c in candles],
+        "Close": [float(c["closePrice"]) for c in candles],
+        "Volume": [float(c["volume"]) for c in candles],
+    }
+    df = pd.DataFrame(data, index=idx)
+    # tz-aware(+09:00) → tz-naive + 날짜 normalize (시각 제거, 일봉이므로 날짜만 유효)
+    df.index = df.index.tz_localize(None).normalize()
+    return df.sort_index()
+
+
 def _fetch_with_fdr(symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
     """FinanceDataReader로 주가 데이터를 수집한다."""
     fdr_symbol = _to_krx_code(symbol) if symbol.endswith((".KS", ".KQ")) else symbol
