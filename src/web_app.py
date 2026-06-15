@@ -961,6 +961,33 @@ _ICON_DL    = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" vi
 _ICON_LIST  = '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>'
 
 
+def _render_flashes() -> str:
+    """세션의 flash 메시지를 alert 카드로 렌더링한다 (없으면 빈 문자열).
+
+    카테고리 매핑: success → 녹색, warning → 호박색, error → alert-error.
+    request 컨텍스트가 없을 때(에러 페이지 등)는 조용히 건너뛴다.
+    """
+    try:
+        from flask import get_flashed_messages
+        msgs = get_flashed_messages(with_categories=True)
+    except Exception:
+        return ""
+    if not msgs:
+        return ""
+    styles = {
+        "success": 'background:#DCFCE7;color:#166534;border:1px solid #BBF7D0;',
+        "warning": 'background:#FEF3C7;color:#92400E;border:1px solid #FDE68A;',
+        "error": "",  # alert-error CSS 클래스 사용
+    }
+    out = []
+    for category, message in msgs:
+        cls = "alert alert-error" if category == "error" else "alert"
+        style = styles.get(category, styles["success"]) if category != "error" else ""
+        style_attr = f' style="{style}"' if style else ""
+        out.append(f'<div class="{cls}"{style_attr}>{escape(message)}</div>')
+    return "".join(out)
+
+
 def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
     logout_link = (
         '<a class="topbar-link" href="/logout" style="opacity:0.75;">로그아웃</a>'
@@ -1004,6 +1031,7 @@ def _page(title: str, body: str, auto_refresh_js: str = "") -> str:
   </div>
 </nav>
 <main class="main">
+{_render_flashes()}
 {body}
 </main>
 {auto_refresh_js}
@@ -3057,9 +3085,20 @@ def portfolio_view():
       {_market_block("us", "🇺🇸 미국")}
     </div>"""
 
+    sync_form = (
+        f'<form method="post" action="/portfolio/sync" style="display:inline;">'
+        f'{_csrf_input()}'
+        f'<button type="submit" class="badge" '
+        f'onclick="return confirm(\'토스 계좌 보유종목으로 포트폴리오를 덮어씁니다. 진행할까요?\')">'
+        f'📥 토스 동기화</button></form>'
+    )
+
     add_form = f"""
     <div class="card">
-      <div class="card-title">{_ICON_PLUS} 보유 종목 추가 / 갱신</div>
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>{_ICON_PLUS} 보유 종목 추가 / 갱신</span>
+        {sync_form}
+      </div>
       <form method="post" action="/portfolio/add">
         {_csrf_input()}
         <div class="add-form">
@@ -3403,6 +3442,28 @@ def portfolio_view():
     {cards_html}
     {update_form}"""
     return _page("포트폴리오", body, _AUTOCOMPLETE_JS + update_js)
+
+
+@app.route("/portfolio/sync", methods=["POST"])
+def portfolio_sync():
+    """토스 보유주식 → 현재 로그인 사용자 포트폴리오 미러링."""
+    _csrf_validate()
+    from src import toss_sync
+    user = _current_user()
+    try:
+        res = toss_sync.run_sync(user)
+        flash(
+            f"토스 동기화 완료 — 추가 {res['added']} · 갱신 {res['updated']} · "
+            f"제거 {res['removed']} · 건너뜀 {res['skipped']} · "
+            f"실패 {res.get('failed', 0)}",
+            "success",
+        )
+    except toss_sync.SyncAborted as e:
+        flash(f"동기화 중단: {e}", "warning")
+    except Exception as e:  # noqa: BLE001 — 사용자 대면 flash 로 모든 오류 표면화
+        app.logger.exception("portfolio_sync 실패: %s", e)
+        flash(f"동기화 실패: {e}", "error")
+    return redirect(url_for("portfolio_view"), code=303)
 
 
 @app.route("/portfolio/add", methods=["POST"])
