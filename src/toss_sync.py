@@ -9,6 +9,7 @@ import math
 import os
 
 from src import portfolio as portfolio_db
+from src.toss_client import TossClient
 
 logger = logging.getLogger(__name__)
 
@@ -108,3 +109,38 @@ def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
               "skipped": skipped, "failed": failed, "target_count": len(target)}
     logger.info("미러링 완료 — %s", result)
     return result
+
+
+def run_sync(username: str, *, dry_run: bool = False,
+             account_seq: int | str | None = None) -> dict:
+    """fetch accounts → holdings → 미러링. dry_run 이면 DB 무변경 diff 만.
+
+    Raises: SyncAborted (빈 계좌 / 50% 가드), RuntimeError (API 에러)
+    """
+    with TossClient() as client:
+        accounts = client.fetch_accounts()
+        if not accounts:
+            raise SyncAborted("계좌 조회 결과 없음 — sync 중단 (포트폴리오 무변경)")
+        # account_seq 우선순위: 인자 → 환경변수 → 첫 계좌
+        seq = account_seq or os.environ.get("TOSS_SYNC_ACCOUNT_SEQ") \
+            or accounts[0].get("accountSeq")
+        holdings = client.fetch_holdings(seq)
+
+    if dry_run:
+        # mirror 대신 diff 만 계산 — DB 무변경
+        target = {}
+        skipped = 0
+        for h in holdings:
+            sym = _to_sa_symbol(h)
+            qty = _to_float(h.get("quantity"))
+            avg = _to_float(h.get("averagePurchasePrice"))
+            if sym is None or qty is None or avg is None or qty <= 0 or avg <= 0:
+                skipped += 1
+                continue
+            target[sym] = (avg, qty)
+        current = {r["symbol"] for r in portfolio_db.list_holdings(username)}
+        return {"dry_run": True, "target_count": len(target), "skipped": skipped,
+                "would_add": sorted(target.keys() - current),
+                "would_remove": sorted(current - target.keys())}
+
+    return mirror_to_portfolio(username, holdings)

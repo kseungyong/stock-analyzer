@@ -131,3 +131,39 @@ def test_mirror_isolates_add_failure(_pf, _krx_stub, monkeypatch):
     assert "005930.KS" not in syms      # 실패한 종목은 미저장
     assert "AAPL" in syms               # 나머지는 진행
     assert res["failed"] == 1 and res["added"] == 1
+
+
+# --- run_sync 오케스트레이션 (client stub) -----------------------------------
+
+class _FakeClient:
+    def __init__(self, accounts, holdings):
+        self._accounts, self._holdings = accounts, holdings
+    def __enter__(self): return self
+    def __exit__(self, *a): return None
+    def fetch_accounts(self): return self._accounts
+    def fetch_holdings(self, seq): return self._holdings
+
+
+def test_run_sync_dry_run_no_db_change(_pf, _krx_stub, monkeypatch):
+    fake = _FakeClient([{"accountNo": "1", "accountSeq": 7, "accountType": "BROKERAGE"}],
+                       [_h("005930", "KR", 10, 70000)])
+    monkeypatch.setattr(ts, "TossClient", lambda: fake)
+    res = ts.run_sync("admin", dry_run=True)
+    assert res["target_count"] == 1
+    assert _pf.list_holdings("admin") == []   # dry_run → DB 무변경
+
+
+def test_run_sync_aborts_on_empty_accounts(_pf, _krx_stub, monkeypatch):
+    fake = _FakeClient([], [])
+    monkeypatch.setattr(ts, "TossClient", lambda: fake)
+    with pytest.raises(ts.SyncAborted, match="계좌"):
+        ts.run_sync("admin")
+
+
+def test_run_sync_applies(_pf, _krx_stub, monkeypatch):
+    fake = _FakeClient([{"accountNo": "1", "accountSeq": 7, "accountType": "BROKERAGE"}],
+                       [_h("005930", "KR", 10, 70000)])
+    monkeypatch.setattr(ts, "TossClient", lambda: fake)
+    res = ts.run_sync("admin")
+    assert res["added"] == 1
+    assert {r["symbol"] for r in _pf.list_holdings("admin")} == {"005930.KS"}
