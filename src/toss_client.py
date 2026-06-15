@@ -86,3 +86,71 @@ def _issue_token(cid: str, csec: str) -> str:
     _save_token(body["access_token"], body.get("expires_in", 86400))
     logger.info("토스 토큰 신규 발급 — expires_in=%ss", body.get("expires_in"))
     return body["access_token"]
+
+
+def _unwrap(body: dict):
+    """{"result": ...} envelope 언랩. error 객체면 RuntimeError."""
+    if not isinstance(body, dict) or "result" not in body:
+        raise RuntimeError(f"예상치 못한 응답 구조: {str(body)[:200]}")
+    result = body["result"]
+    if isinstance(result, dict) and "error" in result:
+        err = result["error"] or {}
+        raise RuntimeError(f"토스 API 에러: {err.get('code')} {err.get('message')}")
+    return result
+
+
+class TossClient:
+    def __init__(self) -> None:
+        self._cid, self._csec = _load_credentials()
+        self._token: str | None = None
+        self._last_request_at = 0.0
+
+    def __enter__(self): return self
+    def __exit__(self, *exc): return None
+
+    def _ensure_token(self) -> str:
+        if self._token:
+            return self._token
+        cached = _load_cached_token()
+        self._token = cached or _issue_token(self._cid, self._csec)
+        return self._token
+
+    def _throttle(self) -> None:
+        elapsed = time.time() - self._last_request_at
+        if elapsed < _REQUEST_INTERVAL:
+            time.sleep(_REQUEST_INTERVAL - elapsed)
+        self._last_request_at = time.time()
+
+    def _get(self, path: str, extra_headers: dict | None = None):
+        self._throttle()
+        token = self._ensure_token()
+        headers = {"authorization": f"Bearer {token}"}
+        if extra_headers:
+            headers.update(extra_headers)
+        resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
+        if resp.status_code == 401:
+            logger.warning("토스 401 — 토큰 재발급")
+            self._token = None
+            try:
+                _TOKEN_CACHE.unlink()
+            except OSError:
+                pass
+            headers["authorization"] = f"Bearer {self._ensure_token()}"
+            resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
+        resp.raise_for_status()
+        return _unwrap(resp.json())
+
+    def fetch_accounts(self) -> list[dict]:
+        """[{accountNo, accountSeq, accountType}, ...] (빈 리스트 가능)."""
+        result = self._get("/api/v1/accounts")
+        return result if isinstance(result, list) else []
+
+    def fetch_holdings(self, account_seq: int | str) -> list[dict]:
+        """보유 종목 items[]. X-Tossinvest-Account 헤더에 accountSeq(정수) 사용."""
+        result = self._get(
+            "/api/v1/holdings",
+            extra_headers={"X-Tossinvest-Account": str(account_seq)},
+        )
+        if isinstance(result, dict):
+            return result.get("items", []) or []
+        return []
