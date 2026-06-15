@@ -328,6 +328,10 @@ def record_buy(
     new_qty = old_qty + qty
 
     기존 보유 없으면 그대로 (price, qty) 로 신규 추가.
+
+    거래 수량(qty)은 정수 전용 — portfolio_transactions.qty 는 INTEGER.
+    보유 합산 수량(portfolio.qty)만 소수점 지원(미국 fractional). 토스 sync 는
+    이 경로가 아니라 add_holding 을 사용한다.
     """
     if price is None or float(price) <= 0:
         raise ValueError(f"price must be positive, got {price!r}")
@@ -384,6 +388,10 @@ def record_sell(
     수량 0 되면 portfolio row 삭제 (transactions 는 보존).
     수량 > 보유 → ValueError.
     Returns: 새 state {avg_price, qty} or None (전량 매도된 경우).
+
+    거래 수량(qty)은 정수 전용 — portfolio_transactions.qty 는 INTEGER.
+    보유 합산 수량(portfolio.qty)만 소수점 지원(미국 fractional). 토스 sync 는
+    이 경로가 아니라 add_holding/remove_holding 을 사용한다.
     """
     if price is None or float(price) <= 0:
         raise ValueError(f"price must be positive, got {price!r}")
@@ -446,6 +454,10 @@ def record_adjust(
     """수동 조정 — update_holding 과 동일하지만 transactions 에 ADJUST 기록.
 
     감사 추적용. avg_price/qty 변경 시 그 시점 값을 transaction 으로 남김.
+
+    보유 수량(portfolio.qty)은 소수점 지원(미국 fractional)이지만 audit tx
+    (portfolio_transactions.qty)는 정수 전용이라 int(val) 로 절삭해 기록한다.
+    이 비대칭은 의도된 설계 — 합산 보유는 소수점, 개별 거래 row 는 INTEGER.
     """
     sets: list[str] = []
     vals: list[object] = []
