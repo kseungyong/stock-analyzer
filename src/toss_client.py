@@ -54,6 +54,8 @@ def _load_credentials() -> tuple[str, str]:
         env = _load_dotenv(env_path)
         if env.get("TOSS_CLIENT_ID") and env.get("TOSS_CLIENT_SECRET"):
             return env["TOSS_CLIENT_ID"], env["TOSS_CLIENT_SECRET"]
+    # 주의: 이 메시지의 "TOSS_CLIENT" 토큰을 data_fetcher.fetch_stock_data 가
+    # 즉시 FDR 폴백 판별에 사용 (자격증명 미설정 시 재시도 skip). 메시지 변경 시 동기화 필요.
     raise RuntimeError("TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 미설정 — env 또는 .env 필요")
 
 

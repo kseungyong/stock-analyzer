@@ -76,7 +76,7 @@ class TestFetchStockData:
         assert isinstance(df, pd.DataFrame)
         assert not df.empty
 
-    def test_raises_on_empty_data(self):
+    def test_raises_when_both_sources_fail(self):
         # 토스 빈 결과(ValueError) + FDR 폴백도 실패 → 최종 ValueError
         with patch("src.data_fetcher._fetch_with_toss",
                    side_effect=ValueError("토스 데이터 없음")):

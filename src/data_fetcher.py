@@ -118,8 +118,6 @@ def fetch_stock_data(symbol: str, period_days: int = 365, retries: int = 2) -> p
     for attempt in range(retries + 1):
         try:
             df = _fetch_with_toss(symbol, period_days)
-            if df.empty:
-                raise ValueError(f"토스 데이터 없음 {symbol}")
             logger.info("데이터 수집 완료 [토스]: %s", symbol)
             return df
         except Exception as exc:
