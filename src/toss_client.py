@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://openapi.tossinvest.com"
 _TOKEN_CACHE = Path.home() / ".cache" / "stock-analyzer" / "toss_token.json"
 _REQUEST_INTERVAL = 0.1
+_MAX_CANDLE_PAGE = 200  # 토스 candles 단일 페이지 최대 크기
 _ENV_PATHS = [Path(__file__).resolve().parent.parent / ".env"]
 
 try:
@@ -53,6 +54,8 @@ def _load_credentials() -> tuple[str, str]:
         env = _load_dotenv(env_path)
         if env.get("TOSS_CLIENT_ID") and env.get("TOSS_CLIENT_SECRET"):
             return env["TOSS_CLIENT_ID"], env["TOSS_CLIENT_SECRET"]
+    # 주의: 이 메시지의 "TOSS_CLIENT" 토큰을 data_fetcher.fetch_stock_data 가
+    # 즉시 FDR 폴백 판별에 사용 (자격증명 미설정 시 재시도 skip). 메시지 변경 시 동기화 필요.
     raise RuntimeError("TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 미설정 — env 또는 .env 필요")
 
 
@@ -122,13 +125,13 @@ class TossClient:
             time.sleep(_REQUEST_INTERVAL - elapsed)
         self._last_request_at = time.time()
 
-    def _get(self, path: str, extra_headers: dict | None = None):
+    def _get(self, path: str, params: dict | None = None, extra_headers: dict | None = None):
         self._throttle()
         token = self._ensure_token()
         headers = {"authorization": f"Bearer {token}"}
         if extra_headers:
             headers.update(extra_headers)
-        resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
+        resp = _http_get(f"{_BASE_URL}{path}", headers=headers, params=params)
         if resp.status_code == 401:
             # TTL 미만이지만 서버가 거부한 토큰 — unlink 가 _ensure_token 재발급을 강제 (load-bearing)
             logger.warning("토스 401 — 토큰 재발급")
@@ -138,7 +141,7 @@ class TossClient:
             except OSError:
                 pass
             headers["authorization"] = f"Bearer {self._ensure_token()}"
-            resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
+            resp = _http_get(f"{_BASE_URL}{path}", headers=headers, params=params)
         resp.raise_for_status()
         return _unwrap(resp.json())
 
@@ -156,3 +159,25 @@ class TossClient:
         if isinstance(result, dict):
             return result.get("items", []) or []
         return []
+
+    def fetch_candles(self, symbol: str, interval: str = "1d", count: int = 200) -> list[dict]:
+        """일봉 candles 를 count 개까지 수집 (nextBefore 커서 페이지네이션, 최신순 유지).
+
+        반환: raw candle dict 리스트 (변환 안 함). 토스 응답 candles[] 그대로.
+        """
+        collected: list[dict] = []
+        before: str | None = None
+        for _ in range(10):  # 무한루프 가드 (최대 10페이지 = 2000봉)
+            params = {"symbol": symbol, "interval": interval, "count": min(count, _MAX_CANDLE_PAGE)}
+            if before:
+                params["before"] = before
+            result = self._get("/api/v1/candles", params=params)
+            candles = result.get("candles", []) if isinstance(result, dict) else []
+            if not candles:
+                break
+            collected.extend(candles)
+            next_before = result.get("nextBefore")
+            if not next_before or next_before == before or len(collected) >= count:
+                break
+            before = next_before
+        return collected[:count]

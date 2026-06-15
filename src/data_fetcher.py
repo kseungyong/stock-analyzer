@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from deep_translator import GoogleTranslator
 from src.news_kr import fetch_news_kr
+from src.toss_client import TossClient
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,42 @@ def _to_krx_code(symbol: str) -> str:
     return symbol.split(".")[0]
 
 
+def _candles_to_df(candles: list[dict]) -> pd.DataFrame:
+    """토스 candle 리스트 → yfinance 스타일 DataFrame (Open/High/Low/Close/Volume).
+
+    index: timestamp → tz-naive, 날짜 normalize, 오름차순 정렬.
+    빈 입력은 ValueError (fetch_stock_data 가 폴백 트리거).
+    """
+    if not candles:
+        raise ValueError("토스 candles 비어있음")
+    idx = pd.to_datetime([c["timestamp"] for c in candles])
+    data = {
+        "Open": [float(c["openPrice"]) for c in candles],
+        "High": [float(c["highPrice"]) for c in candles],
+        "Low": [float(c["lowPrice"]) for c in candles],
+        "Close": [float(c["closePrice"]) for c in candles],
+        "Volume": [float(c["volume"]) for c in candles],
+    }
+    df = pd.DataFrame(data, index=idx)
+    # tz-aware(+09:00) → tz-naive + 날짜 normalize (시각 제거, 일봉이므로 날짜만 유효)
+    df.index = df.index.tz_localize(None).normalize()
+    return df.sort_index()
+
+
+def _required_count(period_days: int) -> int:
+    """period_days(캘린더 일수) → 필요한 거래일 봉 수 추정. 영업일 비율 ~0.69 에 여유."""
+    return int(period_days * 0.75) + 10
+
+
+def _fetch_with_toss(symbol: str, period_days: int) -> pd.DataFrame:
+    """토스 candles 로 일봉 수집 → DataFrame. .KS/.KQ 는 6자리 코드로 변환."""
+    toss_symbol = _to_krx_code(symbol) if symbol.endswith((".KS", ".KQ")) else symbol
+    count = _required_count(period_days)
+    with TossClient() as client:
+        candles = client.fetch_candles(toss_symbol, interval="1d", count=count)
+    return _candles_to_df(candles)   # 빈 candles 면 ValueError
+
+
 def _fetch_with_fdr(symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
     """FinanceDataReader로 주가 데이터를 수집한다."""
     fdr_symbol = _to_krx_code(symbol) if symbol.endswith((".KS", ".KQ")) else symbol
@@ -64,34 +101,34 @@ def _fetch_with_fdr(symbol: str, start: datetime, end: datetime) -> pd.DataFrame
 
 
 def fetch_stock_data(symbol: str, period_days: int = 365, retries: int = 2) -> pd.DataFrame:
-    """주가 데이터를 yfinance로 수집하고, 실패 시 FinanceDataReader로 폴백한다.
+    """주가 데이터를 토스 candles 로 수집하고, 실패 시 FinanceDataReader 로 폴백한다.
 
     Args:
         symbol: 종목 코드 (예: '005930.KS', 'AAPL')
         period_days: 수집할 과거 일수
-        retries: 실패 시 재시도 횟수
+        retries: 토스 실패 시 재시도 횟수
 
     Returns:
-        OHLCV 데이터프레임
+        OHLCV 데이터프레임 (Open/High/Low/Close/Volume, tz-naive 오름차순 index)
     """
     end = datetime.now()
     start = end - timedelta(days=period_days)
 
-    # 1차: yfinance 시도
+    # 1차: 토스 candles 시도
     for attempt in range(retries + 1):
         try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(start=start, end=end)
-            if df.empty:
-                raise ValueError(f"No data found for {symbol}")
-            df.index = pd.to_datetime(df.index).tz_localize(None)
-            logger.info("데이터 수집 완료 [yfinance]: %s", symbol)
+            df = _fetch_with_toss(symbol, period_days)
+            logger.info("데이터 수집 완료 [토스]: %s", symbol)
             return df
         except Exception as exc:
+            if "TOSS_CLIENT" in str(exc):
+                # 자격증명 미설정 — 재시도 무의미, 즉시 FDR 폴백 (CI/키 없는 환경)
+                logger.warning("토스 자격증명 미설정 [%s] — FDR 폴백", symbol)
+                break
             if attempt < retries:
                 time.sleep(1)
             else:
-                logger.warning("yfinance 실패 [%s]: %s — FinanceDataReader로 폴백", symbol, exc)
+                logger.warning("토스 실패 [%s]: %s — FinanceDataReader로 폴백", symbol, exc)
 
     # 2차: FinanceDataReader 폴백
     try:
@@ -100,7 +137,7 @@ def fetch_stock_data(symbol: str, period_days: int = 365, retries: int = 2) -> p
         return df
     except Exception as fdr_exc:
         raise ValueError(
-            f"yfinance 및 FinanceDataReader 모두 실패 [{symbol}]: {fdr_exc}"
+            f"토스 및 FinanceDataReader 모두 실패 [{symbol}]: {fdr_exc}"
         ) from fdr_exc
 
 
