@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://openapi.tossinvest.com"
 _TOKEN_CACHE = Path.home() / ".cache" / "stock-analyzer" / "toss_token.json"
 _REQUEST_INTERVAL = 0.1
+_MAX_CANDLE_PAGE = 200  # 토스 candles 단일 페이지 최대 크기
 _ENV_PATHS = [Path(__file__).resolve().parent.parent / ".env"]
 
 try:
@@ -165,7 +166,7 @@ class TossClient:
         collected: list[dict] = []
         before: str | None = None
         for _ in range(10):  # 무한루프 가드 (최대 10페이지 = 2000봉)
-            params = {"symbol": symbol, "interval": interval, "count": 200}
+            params = {"symbol": symbol, "interval": interval, "count": min(count, _MAX_CANDLE_PAGE)}
             if before:
                 params["before"] = before
             result = self._get("/api/v1/candles", params=params)

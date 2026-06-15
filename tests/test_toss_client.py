@@ -40,7 +40,7 @@ def test_fetch_candles_paginates(monkeypatch):
     client = tc.TossClient()
     result = client.fetch_candles("005930", interval="1d", count=240)
     assert len(result) == 240            # 200 + 50 중 240 개로 트림
-    assert "before" not in calls[0] or calls[0]["before"] is None  # 1페이지 커서 없음
+    assert "before" not in calls[0]  # 1페이지 커서 없음
     assert calls[1]["before"] == "CURSOR1"  # 2페이지 커서 전달
 
 
@@ -52,3 +52,15 @@ def test_fetch_candles_stops_on_null_cursor(monkeypatch):
     client = tc.TossClient()
     result = client.fetch_candles("005930", count=200)
     assert len(result) == 1   # nextBefore=null → 1페이지서 종료
+
+
+def test_fetch_candles_stops_at_page_guard(monkeypatch):
+    calls = {"n": 0}
+    def fake_get(self, path, params=None, extra_headers=None):
+        calls["n"] += 1
+        return {"candles": [{"t": calls["n"]}], "nextBefore": f"CURSOR{calls['n']}"}  # 항상 새 non-null 커서
+    monkeypatch.setattr(tc.TossClient, "_get", fake_get)
+    monkeypatch.setattr(tc.TossClient, "__init__", lambda self: None)
+    client = tc.TossClient()
+    result = client.fetch_candles("005930", count=10000)
+    assert calls["n"] == 10        # 10페이지 가드에서 멈춤 (무한루프 방지)
