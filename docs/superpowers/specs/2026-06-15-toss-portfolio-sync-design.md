@@ -171,12 +171,16 @@ for sym in current.keys() - target.keys():
 |------|------|
 | `fetch_accounts()` 빈 배열 | abort — 포트폴리오 무변경 |
 | holdings fetch 예외 / non-200 | abort — 기존 포트폴리오 보존 |
-| 삭제 대상이 현재 보유 종목 수의 50% 초과 | abort + 경고 로그. `TOSS_SYNC_FORCE=1` 로만 강제 |
+| 현재 보유 **3종목 이상** & 삭제 대상이 50% 초과 | abort + 경고 로그. `TOSS_SYNC_FORCE=1` 로만 강제 |
 | `avg_price <= 0` 또는 `qty < 0` | 해당 종목 skip + 로그 |
 | symbol 변환 실패 | 해당 종목 skip + 로그 (sync 계속) |
 
 > 빈 계좌가 진짜 정상(전량 청산)일 수 있으므로 50% 가드는 hard-fail 이 아니라
 > 강제 플래그로 우회 가능하게 둔다. cleanup.py 의 safety-limit 과 동일 철학.
+>
+> **3종목 이상 조건**: 1~2종목 소규모 포트폴리오는 1종목 정상 매도도 50% 초과가
+> 되어 false-positive 가 잦다. 가드 목적은 *대량* 삭제 방지이므로 보유 3종목
+> 이상일 때만 활성화한다 (구현 시 plan 의 50%-only 공식이 자체 테스트와 모순돼 보정).
 
 ## 8. 트리거
 

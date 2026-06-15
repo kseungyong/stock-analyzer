@@ -78,7 +78,7 @@ def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
     if len(current) >= 3 and len(to_remove) > len(current) * 0.5:
         if os.environ.get("TOSS_SYNC_FORCE") != "1":
             raise SyncAborted(
-                f"삭제 대상 {len(to_remove)}/{len(current)} 이 50%% 초과 — "
+                f"삭제 대상 {len(to_remove)}/{len(current)} 이 50% 초과 — "
                 f"대량삭제 의심. TOSS_SYNC_FORCE=1 로 강제 가능."
             )
         logger.warning("TOSS_SYNC_FORCE — 50%% 가드 우회, %d 종목 제거", len(to_remove))
