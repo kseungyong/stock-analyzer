@@ -37,3 +37,64 @@ def _to_sa_symbol(holding: dict) -> str | None:
         return f"{sym}{suffix}"
     logger.warning("알 수 없는 marketCountry=%s symbol=%s — skip", country, sym)
     return None
+
+
+class SyncAborted(RuntimeError):
+    """안전장치 발동으로 sync 중단 (포트폴리오 무변경)."""
+
+
+def _to_float(v) -> float | None:
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def mirror_to_portfolio(username: str, holdings: list[dict]) -> dict:
+    """토스 holdings 로 portfolio 전체 미러링.
+
+    Returns: {added, updated, removed, skipped, target_count}
+    Raises: SyncAborted (50% 삭제 가드, TOSS_SYNC_FORCE=1 로 우회)
+    """
+    target: dict[str, tuple[float, float]] = {}
+    skipped = 0
+    for h in holdings:
+        sym = _to_sa_symbol(h)
+        qty = _to_float(h.get("quantity"))
+        avg = _to_float(h.get("averagePurchasePrice"))
+        if sym is None or qty is None or avg is None or qty <= 0 or avg <= 0:
+            skipped += 1
+            logger.info("skip holding: symbol=%s qty=%s avg=%s",
+                        h.get("symbol"), h.get("quantity"), h.get("averagePurchasePrice"))
+            continue
+        target[sym] = (avg, qty)
+
+    current = {r["symbol"] for r in portfolio_db.list_holdings(username)}
+    to_remove = current - target.keys()
+
+    # 안전장치: 삭제가 현재 보유의 50% 초과면 abort (FORCE 로 우회)
+    # 단 소규모 포트폴리오(<3종목)는 1종목 정리도 50% 초과가 되므로 제외 —
+    # 가드의 목적은 토스 API 일시오류로 인한 '대량삭제' 방지이지 정상적인 종목 교체가 아님.
+    if len(current) >= 3 and len(to_remove) > len(current) * 0.5:
+        if os.environ.get("TOSS_SYNC_FORCE") != "1":
+            raise SyncAborted(
+                f"삭제 대상 {len(to_remove)}/{len(current)} 이 50%% 초과 — "
+                f"대량삭제 의심. TOSS_SYNC_FORCE=1 로 강제 가능."
+            )
+        logger.warning("TOSS_SYNC_FORCE — 50%% 가드 우회, %d 종목 제거", len(to_remove))
+
+    added = updated = removed = 0
+    for sym, (avg, qty) in target.items():
+        is_new = portfolio_db.add_holding(username, sym, avg, qty)
+        if is_new:
+            added += 1
+        else:
+            updated += 1
+    for sym in to_remove:
+        if portfolio_db.remove_holding(username, sym):
+            removed += 1
+
+    result = {"added": added, "updated": updated, "removed": removed,
+              "skipped": skipped, "target_count": len(target)}
+    logger.info("미러링 완료 — %s", result)
+    return result
