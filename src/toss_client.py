@@ -122,13 +122,13 @@ class TossClient:
             time.sleep(_REQUEST_INTERVAL - elapsed)
         self._last_request_at = time.time()
 
-    def _get(self, path: str, extra_headers: dict | None = None):
+    def _get(self, path: str, params: dict | None = None, extra_headers: dict | None = None):
         self._throttle()
         token = self._ensure_token()
         headers = {"authorization": f"Bearer {token}"}
         if extra_headers:
             headers.update(extra_headers)
-        resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
+        resp = _http_get(f"{_BASE_URL}{path}", headers=headers, params=params)
         if resp.status_code == 401:
             # TTL 미만이지만 서버가 거부한 토큰 — unlink 가 _ensure_token 재발급을 강제 (load-bearing)
             logger.warning("토스 401 — 토큰 재발급")
@@ -138,7 +138,7 @@ class TossClient:
             except OSError:
                 pass
             headers["authorization"] = f"Bearer {self._ensure_token()}"
-            resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
+            resp = _http_get(f"{_BASE_URL}{path}", headers=headers, params=params)
         resp.raise_for_status()
         return _unwrap(resp.json())
 
@@ -156,3 +156,25 @@ class TossClient:
         if isinstance(result, dict):
             return result.get("items", []) or []
         return []
+
+    def fetch_candles(self, symbol: str, interval: str = "1d", count: int = 200) -> list[dict]:
+        """일봉 candles 를 count 개까지 수집 (nextBefore 커서 페이지네이션, 최신순 유지).
+
+        반환: raw candle dict 리스트 (변환 안 함). 토스 응답 candles[] 그대로.
+        """
+        collected: list[dict] = []
+        before: str | None = None
+        for _ in range(10):  # 무한루프 가드 (최대 10페이지 = 2000봉)
+            params = {"symbol": symbol, "interval": interval, "count": 200}
+            if before:
+                params["before"] = before
+            result = self._get("/api/v1/candles", params=params)
+            candles = result.get("candles", []) if isinstance(result, dict) else []
+            if not candles:
+                break
+            collected.extend(candles)
+            next_before = result.get("nextBefore")
+            if not next_before or next_before == before or len(collected) >= count:
+                break
+            before = next_before
+        return collected[:count]
