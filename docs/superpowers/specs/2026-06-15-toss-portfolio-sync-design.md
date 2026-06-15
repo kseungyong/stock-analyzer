@@ -1,8 +1,11 @@
 # 토스증권 보유주식 → 포트폴리오 자동 동기화 설계
 
 - **작성일**: 2026-06-15
-- **상태**: 설계 승인 완료 (구현 대기)
+- **상태**: 설계 승인 완료 + 실제 API probe 검증 완료 (구현 대기)
 - **관련 모듈**: `src/portfolio.py`, `src/stock_search.py`, `src/kis_client.py`(참조 패턴)
+
+> **2026-06-15 probe 검증**: 실제 토스 계좌로 token→accounts→holdings 호출 성공.
+> 응답 포맷·식별자·symbol 포맷·소수점 수량 이슈를 실측으로 확정 (아래 반영).
 
 ## 1. 목적
 
@@ -28,8 +31,15 @@ OpenAPI: https://openapi.tossinvest.com/openapi-docs/latest/openapi.json
 | 메서드 | 경로 | 용도 | 헤더 |
 |--------|------|------|------|
 | POST | `/oauth2/token` | 토큰 발급 | (없음) |
-| GET | `/api/v1/accounts` | 계좌번호 조회 | `Authorization: Bearer` |
-| GET | `/api/v1/holdings` | 보유주식 조회 | `Authorization: Bearer` + `X-Tossinvest-Account: {accountNo}` |
+| GET | `/api/v1/accounts` | 계좌 조회 | `Authorization: Bearer` |
+| GET | `/api/v1/holdings` | 보유주식 조회 | `Authorization: Bearer` + `X-Tossinvest-Account: {accountSeq}` |
+
+- Base URL: `https://openapi.tossinvest.com`
+- **모든 응답은 `{"result": ...}` envelope 로 감싸짐** (probe 확인). 에러 시
+  `{"result": {"error": {"requestId", "code", "message"}}}` (HTTP 4xx).
+- **`X-Tossinvest-Account` 헤더에는 `accountNo`(11자리 문자열)가 아니라
+  `accountSeq`(정수)를 넣어야 함.** accountNo 사용 시 400 `account-not-found`.
+  (probe 로 확정 — OpenAPI 문서 추정과 다름)
 
 ### 인증
 
@@ -38,7 +48,23 @@ OAuth2 Client Credentials Grant.
 - 응답: `access_token`(JWT), `token_type=Bearer`, `expires_in`(초, ~86400)
 - KIS 와 동일한 패턴 → `src/kis_client.py` 토큰 캐시/rate-limit 구조 복제
 
-### holdings 응답 핵심 필드 (`items[]`)
+### accounts 응답 (probe 실측)
+
+`{"result": [{"accountNo": "<11자리 문자열>", "accountSeq": <정수>, "accountType": "BROKERAGE"}]}`
+
+- `result` 는 **list** (계좌 복수 가능). 첫 계좌 또는 `TOSS_SYNC_ACCOUNT_SEQ` 지정분 사용.
+- holdings 호출에 쓰는 식별자는 **`accountSeq`**.
+
+### holdings 응답 (probe 실측)
+
+`{"result": {"totalPurchaseAmount", "marketValue", "profitLoss", "dailyProfitLoss", "items": [...]}}`
+
+`items[]` 각 종목 키 (실측):
+`symbol, name, marketCountry, currency, quantity, lastPrice, averagePurchasePrice,
+marketValue{purchaseAmount,amount,amountAfterCost}, profitLoss{amount,amountAfterCost,rate,rateAfterCost},
+dailyProfitLoss{amount,rate}, cost{commission,tax}`
+
+### holdings 핵심 필드 (`items[]`)
 
 | 토스 필드 | 타입 | 매핑 |
 |-----------|------|------|
@@ -56,7 +82,8 @@ OAuth2 Client Credentials Grant.
 ```
 TOSS_CLIENT_ID=...
 TOSS_CLIENT_SECRET=...
-TOSS_SYNC_USERNAME=admin     # 자동 스케줄이 sync 할 대상 username
+TOSS_SYNC_USERNAME=admin       # 자동 스케줄이 sync 할 대상 username
+TOSS_SYNC_ACCOUNT_SEQ=         # (선택) 계좌 복수 시 지정. 미지정이면 첫 계좌
 ```
 토큰 캐시: `~/.cache/stock-analyzer/toss_token.json` (TTL 24h)
 
@@ -68,8 +95,8 @@ TOSS_SYNC_USERNAME=admin     # 자동 스케줄이 sync 할 대상 username
 src/toss_client.py            # 외부 I/O (OAuth2 + holdings)
   ├ _load_credentials()        env → .env
   ├ _load_cached_token() / _save_token()
-  ├ TossClient.fetch_accounts() -> list[str]   # accountNo 목록
-  └ TossClient.fetch_holdings(account_no) -> list[dict]
+  ├ TossClient.fetch_accounts() -> list[dict]   # [{accountNo, accountSeq, accountType}]
+  └ TossClient.fetch_holdings(account_seq) -> list[dict]   # X-Tossinvest-Account=accountSeq
 
 src/toss_sync.py             # 비즈니스 로직 (토스 API 비의존, 단위 테스트 가능)
   ├ _to_sa_symbol(toss_symbol, market_country) -> str
@@ -94,14 +121,32 @@ scripts/toss-sync.plist.template   # launchd
   - KOSDAQ → `.KQ`, 그 외 → `.KS` (stock_search.py:50 과 동일 규칙)
   - 룩업 실패 시 `.KS` 기본값 + 경고 로그
 
-> 구현 메모: KRX listing 룩업 테이블은 프로세스 1회 캐시. 토스 한국 종목 symbol 이
-> 6자리 숫자 코드가 아닌 다른 포맷(예: 접두사 부착)일 경우, 구현 첫 단계에서 실제
-> 응답으로 확인 후 정규화 함수를 맞춘다. 변환 불가 종목은 skip + 로그 (sync 중단 안 함).
+> **probe 확정**: 토스 한국 종목 `symbol` 은 **6자리 순수 숫자**(`isdigit=True`, 예 `005930`),
+> 미국은 알파벳 ticker(`isalnum`, 예 `INTQ`). 별도 정규화 불필요 — 한국은 6자리 코드에
+> suffix 부착, 미국은 그대로. KRX listing 룩업 테이블은 프로세스 1회 캐시.
+> 룩업 실패/변환 불가 종목은 skip + 로그 (sync 중단 안 함).
+
+## 5b. 소수점 수량 — `portfolio.qty` REAL 마이그레이션
+
+**probe 확정**: 토스 미국 보유분에 **소수점 수량(fractional shares)** 존재
+(`any fractional quantity: True`). 현 `portfolio.qty INTEGER` 는 `int()` 절삭으로
+1.5주 → 1주가 되어 평가액이 틀어진다. → **`portfolio.qty` 를 REAL 로 마이그레이션.**
+
+영향 범위 (구현 시 일괄 점검):
+- 스키마: `portfolio.qty INTEGER` → `REAL`. SQLite 는 ALTER 로 타입 변경 불가 →
+  `_migrate_to_multiuser` 와 동일한 rename→recreate→copy→drop 패턴으로 멱등 마이그레이션.
+- `portfolio.py`: `add_holding`, `update_holding`, `list_holdings`,
+  `get_holding_with_pnl`, `_validate` 의 `int(qty)` → `float(qty)`.
+- 표시 포맷: 정수면 정수로, 소수면 소수 자릿수 표시 (web_app 보유표/평가손익).
+- **범위 한정**: `portfolio_transactions.qty` 와 `record_buy/sell/adjust` 는 이번 sync
+  경로 밖(수동 거래 기록 전용)이므로 INTEGER 유지. 단 record_* 가 portfolio.qty 를
+  갱신할 때 `int(existing_qty)` → `float(existing_qty)` 로 읽기 일관성만 맞춘다.
+- 수동 입력 폼(web_app)은 한국 주식 기준 정수 입력 유지 — 변경 불필요.
 
 ## 6. 미러링 로직 (`mirror_to_portfolio`)
 
 ```
-target = { _to_sa_symbol(h): (avg_price, qty) for h in holdings if qty > 0 }
+target = { _to_sa_symbol(h): (float(avg_price), float(qty)) for h in holdings if float(qty) > 0 }
 current = { row.symbol: row for row in portfolio.list_holdings(username) }
 
 for sym, (avg, qty) in target.items():
@@ -167,6 +212,8 @@ python main.py toss-sync --user <name>  # 특정 사용자
 - `mirror_to_portfolio`: add/update/remove/skip diff (임시 DB)
 - 50% 삭제 가드 abort + `TOSS_SYNC_FORCE` 우회
 - `qty == 0` skip, `avg_price <= 0` skip
+- **소수점 qty(미국 fractional) 저장/조회 정확성** — REAL 마이그레이션 후 1.5주 보존 검증
+- envelope/식별자: `accountSeq` 로 holdings 조회, `accountNo` 는 실패하는 회귀 테스트
 - client(`toss_client.py`)는 외부 I/O → httpx mock 또는 통합테스트로 분리,
   단위 테스트 범위에서 제외
 
