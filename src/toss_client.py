@@ -106,6 +106,7 @@ class TossClient:
         self._last_request_at = 0.0
 
     def __enter__(self): return self
+    # 모듈 레벨 _http_get 이 매 호출 새 연결 — 정리할 client 핸들 없음 (의도된 단순화)
     def __exit__(self, *exc): return None
 
     def _ensure_token(self) -> str:
@@ -129,6 +130,7 @@ class TossClient:
             headers.update(extra_headers)
         resp = _http_get(f"{_BASE_URL}{path}", headers=headers)
         if resp.status_code == 401:
+            # TTL 미만이지만 서버가 거부한 토큰 — unlink 가 _ensure_token 재발급을 강제 (load-bearing)
             logger.warning("토스 401 — 토큰 재발급")
             self._token = None
             try:
