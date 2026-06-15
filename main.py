@@ -434,6 +434,11 @@ def main():
         "foreign-ranking",
         help="외인/기관/연기금 순매수 ranking → universe push (launchd cron 용)",
     )
+    toss_parser = subparsers.add_parser(
+        "toss-sync", help="토스 보유주식 → 포트폴리오 미러링 (launchd cron 용)",
+    )
+    toss_parser.add_argument("--dry-run", action="store_true", help="diff 만 출력, DB 무변경")
+    toss_parser.add_argument("--user", type=str, default=None, help="대상 username (기본 TOSS_SYNC_USERNAME)")
     cleanup_parser = subparsers.add_parser(
         "cleanup", help="자동 종목 정리 (composite < -5, 7일 연속)"
     )
@@ -642,6 +647,21 @@ def main():
             logger.info("foreign-ranking 완료: %s", result)
         except Exception as e:
             logger.exception("foreign-ranking 실패: %s", e)
+            sys.exit(1)
+        return
+
+    if args.command == "toss-sync":
+        from src import toss_sync, portfolio as _pf
+        _pf.init_db()
+        user = args.user or os.environ.get("TOSS_SYNC_USERNAME", "admin")
+        try:
+            result = toss_sync.run_sync(user, dry_run=args.dry_run)
+            logger.info("toss-sync 완료 (user=%s): %s", user, result)
+        except toss_sync.SyncAborted as e:
+            logger.warning("toss-sync 중단: %s", e)
+            sys.exit(2)
+        except Exception as e:
+            logger.exception("toss-sync 실패: %s", e)
             sys.exit(1)
         return
 
