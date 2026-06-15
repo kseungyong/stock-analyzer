@@ -56,6 +56,14 @@ def test_invalid_qty_raises():
         p.add_holding("admin", "AAPL", 150.0, -5)
 
 
+def test_add_holding_preserves_fractional_qty():
+    # 미국 fractional shares — 1.5 주가 1.0 으로 절삭되면 안 됨.
+    p.add_holding("admin", "AAPL", avg_price=190.5, qty=1.5)
+    rows = p.list_holdings("admin")
+    assert len(rows) == 1
+    assert rows[0]["qty"] == 1.5   # int 절삭되면 1.0 으로 실패
+
+
 def test_remove_existing_returns_true():
     p.add_holding("admin", "AAPL", 150.0, 10)
     assert p.remove_holding("admin", "AAPL") is True
@@ -77,6 +85,27 @@ def test_update_partial():
 
 def test_update_missing_returns_false():
     assert p.update_holding("admin", "NONE", avg_price=100.0) is False
+
+
+def test_update_holding_preserves_fractional_qty():
+    # 미국 fractional shares — update_holding 으로 1.5 주 갱신 시 절삭 금지.
+    p.add_holding("admin", "AAPL", 190.5, 10)
+    assert p.update_holding("admin", "AAPL", qty=1.5) is True
+    rows = p.list_holdings("admin")
+    assert rows[0]["qty"] == 1.5   # int 절삭되면 1.0 으로 실패
+    h = p.get_holding_with_pnl("admin", "AAPL")
+    assert h["qty"] == 1.5
+
+
+def test_adjust_preserves_fractional_qty():
+    # record_adjust 로 소수점 보유수량 조정 — portfolio.qty 는 float 보존.
+    # (audit tx 의 qty 는 정수 절삭이 의도된 동작 — 여기선 검증 대상 아님)
+    p.add_holding("admin", "AAPL", 190.5, 10)
+    assert p.record_adjust("admin", "AAPL", qty=2.5) is True
+    rows = p.list_holdings("admin")
+    assert rows[0]["qty"] == 2.5   # int 절삭되면 2.0 으로 실패
+    h = p.get_holding_with_pnl("admin", "AAPL")
+    assert h["qty"] == 2.5
 
 
 def test_count_holdings():

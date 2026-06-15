@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     username   TEXT NOT NULL,
     symbol     TEXT NOT NULL,
     avg_price  REAL NOT NULL,
-    qty        INTEGER NOT NULL DEFAULT 0,
+    qty        REAL NOT NULL DEFAULT 0,
     added_at   INTEGER NOT NULL,
     notes      TEXT,
     PRIMARY KEY (username, symbol)
@@ -132,15 +132,15 @@ def init_db() -> None:
     logger.info("portfolio DB 초기화 완료: %s", _DB_PATH)
 
 
-def _validate(avg_price: float, qty: int) -> None:
+def _validate(avg_price: float, qty: float) -> None:
     if avg_price is None or float(avg_price) <= 0:
         raise ValueError(f"avg_price must be positive, got {avg_price!r}")
-    if qty is None or int(qty) < 0:
+    if qty is None or float(qty) < 0:
         raise ValueError(f"qty must be non-negative, got {qty!r}")
 
 
 def add_holding(
-    username: str, symbol: str, avg_price: float, qty: int,
+    username: str, symbol: str, avg_price: float, qty: float,
     notes: str | None = None,
 ) -> bool:
     """추가 또는 갱신. 새로 추가됐으면 True, 기존 갱신이면 False."""
@@ -161,7 +161,7 @@ def add_holding(
                          avg_price = excluded.avg_price,
                          qty       = excluded.qty,
                          notes     = excluded.notes""",
-                    (username, symbol, float(avg_price), int(qty), now, notes),
+                    (username, symbol, float(avg_price), float(qty), now, notes),
                 )
                 conn.execute("COMMIT")
             except Exception:
@@ -190,7 +190,7 @@ def remove_holding(username: str, symbol: str) -> bool:
 def update_holding(
     username: str, symbol: str, *,
     avg_price: float | None = None,
-    qty: int | None = None,
+    qty: float | None = None,
     notes: str | None = None,
 ) -> bool:
     """부분 업데이트. 존재했으면 True, 없었으면 False.
@@ -205,10 +205,10 @@ def update_holding(
         sets.append("avg_price = ?")
         vals.append(float(avg_price))
     if qty is not None:
-        if int(qty) < 0:
+        if float(qty) < 0:
             raise ValueError(f"qty must be non-negative, got {qty!r}")
         sets.append("qty = ?")
-        vals.append(int(qty))
+        vals.append(float(qty))
     if notes is not None:
         sets.append("notes = ?")
         vals.append(notes)
@@ -239,7 +239,7 @@ def list_holdings(username: str) -> list[dict]:
             (username,),
         ).fetchall()
     return [
-        {"symbol": r[0], "avg_price": float(r[1]), "qty": int(r[2]),
+        {"symbol": r[0], "avg_price": float(r[1]), "qty": float(r[2]),
          "added_at": int(r[3]), "notes": r[4]}
         for r in rows
     ]
@@ -276,7 +276,7 @@ def list_holdings_with_pnl(username: str) -> list[dict]:
     result = []
     for r in rows:
         avg_price = float(r[1])
-        qty = int(r[2])
+        qty = float(r[2])
         last_close = float(r[6]) if r[6] is not None else None
         pnl_pct = None
         pnl_abs = None
@@ -328,6 +328,10 @@ def record_buy(
     new_qty = old_qty + qty
 
     기존 보유 없으면 그대로 (price, qty) 로 신규 추가.
+
+    거래 수량(qty)은 정수 전용 — portfolio_transactions.qty 는 INTEGER.
+    보유 합산 수량(portfolio.qty)만 소수점 지원(미국 fractional). 토스 sync 는
+    이 경로가 아니라 add_holding 을 사용한다.
     """
     if price is None or float(price) <= 0:
         raise ValueError(f"price must be positive, got {price!r}")
@@ -344,7 +348,7 @@ def record_buy(
                 (username, symbol),
             ).fetchone()
             if existing:
-                old_avg, old_qty = float(existing[0]), int(existing[1])
+                old_avg, old_qty = float(existing[0]), float(existing[1])
                 new_qty = old_qty + qty
                 new_avg = (old_avg * old_qty + price * qty) / new_qty
             else:
@@ -384,6 +388,10 @@ def record_sell(
     수량 0 되면 portfolio row 삭제 (transactions 는 보존).
     수량 > 보유 → ValueError.
     Returns: 새 state {avg_price, qty} or None (전량 매도된 경우).
+
+    거래 수량(qty)은 정수 전용 — portfolio_transactions.qty 는 INTEGER.
+    보유 합산 수량(portfolio.qty)만 소수점 지원(미국 fractional). 토스 sync 는
+    이 경로가 아니라 add_holding/remove_holding 을 사용한다.
     """
     if price is None or float(price) <= 0:
         raise ValueError(f"price must be positive, got {price!r}")
@@ -401,7 +409,7 @@ def record_sell(
             ).fetchone()
             if not existing:
                 raise ValueError(f"no holding for {username}/{symbol}")
-            old_avg, old_qty = float(existing[0]), int(existing[1])
+            old_avg, old_qty = float(existing[0]), float(existing[1])
             if qty > old_qty:
                 raise ValueError(
                     f"sell qty {qty} exceeds holding {old_qty}")
@@ -440,12 +448,16 @@ def record_sell(
 def record_adjust(
     username: str, symbol: str, *,
     avg_price: float | None = None,
-    qty: int | None = None,
+    qty: float | None = None,
     notes: str | None = None,
 ) -> bool:
     """수동 조정 — update_holding 과 동일하지만 transactions 에 ADJUST 기록.
 
     감사 추적용. avg_price/qty 변경 시 그 시점 값을 transaction 으로 남김.
+
+    보유 수량(portfolio.qty)은 소수점 지원(미국 fractional)이지만 audit tx
+    (portfolio_transactions.qty)는 정수 전용이라 int(val) 로 절삭해 기록한다.
+    이 비대칭은 의도된 설계 — 합산 보유는 소수점, 개별 거래 row 는 INTEGER.
     """
     sets: list[str] = []
     vals: list[object] = []
@@ -458,11 +470,11 @@ def record_adjust(
         vals.append(float(avg_price))
         tx_records.append(("avg_price", float(avg_price)))
     if qty is not None:
-        if int(qty) < 0:
+        if float(qty) < 0:
             raise ValueError(f"qty must be non-negative, got {qty!r}")
         sets.append("qty = ?")
-        vals.append(int(qty))
-        tx_records.append(("qty", float(int(qty))))
+        vals.append(float(qty))
+        tx_records.append(("qty", float(qty)))
     if notes is not None:
         sets.append("notes = ?")
         vals.append(notes)

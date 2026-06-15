@@ -1382,3 +1382,71 @@ class TestApiUniverse:
     def test_delete_invalid_symbol_returns_400(self, client):
         resp = client.delete("/api/universe/<script>")
         assert resp.status_code == 400
+
+
+class TestPortfolioSync:
+    """POST /portfolio/sync — toss_sync.run_sync 3분기 회귀 보호.
+
+    라우트는 함수 내부에서 `from src import toss_sync` 하므로
+    monkeypatch 대상은 `src.toss_sync.run_sync`.
+    flash 메시지는 redirect(303) 직후 세션의 _flashes 에서 검증
+    (followed redirect 는 portfolio_view 의 DB 접근을 유발하므로 회피).
+    """
+
+    @staticmethod
+    def _flashes(client):
+        with client.session_transaction() as sess:
+            return sess.get("_flashes", [])
+
+    def test_success_flashes_summary(self, client, monkeypatch):
+        import src.toss_sync as ts
+        monkeypatch.setattr(
+            ts, "run_sync",
+            lambda user: {"added": 2, "updated": 1, "removed": 0,
+                          "skipped": 1, "failed": 0, "target_count": 3},
+        )
+        resp = _post(client, "/portfolio/sync", {})
+        assert resp.status_code == 303
+        assert resp.headers["Location"].endswith("/portfolio")
+        flashes = self._flashes(client)
+        assert len(flashes) == 1
+        category, message = flashes[0]
+        assert category == "success"
+        assert "추가 2" in message
+        assert "갱신 1" in message
+        assert "동기화 완료" in message
+
+    def test_sync_aborted_flashes_warning(self, client, monkeypatch):
+        import src.toss_sync as ts
+
+        def _abort(user):
+            raise ts.SyncAborted("계좌 정보를 찾을 수 없습니다")
+
+        monkeypatch.setattr(ts, "run_sync", _abort)
+        resp = _post(client, "/portfolio/sync", {})
+        assert resp.status_code == 303
+        flashes = self._flashes(client)
+        assert len(flashes) == 1
+        category, message = flashes[0]
+        assert category == "warning"
+        assert "동기화 중단" in message
+
+    def test_unexpected_exception_flashes_error_not_500(self, client, monkeypatch):
+        import src.toss_sync as ts
+
+        def _boom(user):
+            raise RuntimeError("토스 API 연결 실패")
+
+        monkeypatch.setattr(ts, "run_sync", _boom)
+        resp = _post(client, "/portfolio/sync", {})
+        # 예외가 500 으로 새지 않고 flash + redirect 로 표면화되어야 한다
+        assert resp.status_code == 303
+        flashes = self._flashes(client)
+        assert len(flashes) == 1
+        category, message = flashes[0]
+        assert category == "error"
+        assert "동기화 실패" in message
+
+    def test_csrf_missing_returns_403(self, client):
+        resp = client.post("/portfolio/sync", data={})
+        assert resp.status_code == 403
