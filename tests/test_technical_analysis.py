@@ -70,6 +70,16 @@ class TestGenerateSignal:
         names = [ind["name"] for ind in sig["indicators"]]
         assert "거래량" in names
 
+    def test_short_history_does_not_crash(self):
+        """신규상장 종목(거래일 < 60): MA60/MACD 가 전 행 NaN → df.dropna() 가
+        모든 행을 삭제하던 버그(0193T0.KS). dropna 로 무너지지 않고 단기지표로
+        시그널을 내야 한다."""
+        short_df = compute_indicators(_make_df(n=27))
+        assert len(short_df.dropna()) == 0  # 전제: dropna 하면 전멸하는 데이터
+        sig = generate_signal(short_df)
+        assert sig["signal"] in ("매수", "매도", "관망")
+        assert 0 <= sig["rsi"] <= 100
+
 
 @pytest.fixture(autouse=True)
 def _clear_market_cache():

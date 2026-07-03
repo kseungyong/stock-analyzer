@@ -200,8 +200,18 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def generate_signal(df: pd.DataFrame) -> dict:
     """최신 데이터 기반 매수/매도/관망 시그널을 생성한다."""
-    latest = df.dropna().iloc[-1]
-    prev = df.dropna().iloc[-2]
+    # 전 컬럼 dropna 는 지표 워밍업 구간(초반 NaN 행)을 잘라내려는 의도지만,
+    # MA60/MACD 처럼 창(window)이 긴 지표가 '전 행 NaN' 이 되는 신규상장 종목
+    # (거래일 < 60, 예: 0193T0.KS)에서는 모든 행을 삭제해 .iloc[-1] 이 붕괴한다.
+    # dropna 결과가 2행 미만이면 원본 마지막 2행을 사용한다 — 단기지표(RSI/MA20/
+    # 볼린저 등)는 유효하고, 장기지표 NaN 은 아래 각 분기가 중립으로 흡수한다.
+    clean = df.dropna()
+    if len(clean) < 2:
+        clean = df
+    if len(clean) < 2:
+        raise ValueError(f"시그널 생성 불가 — 데이터 부족 ({len(df)}행)")
+    latest = clean.iloc[-1]
+    prev = clean.iloc[-2]
     score = 0
     reasons = []
     indicators = []
@@ -321,7 +331,7 @@ def generate_signal(df: pd.DataFrame) -> dict:
         "reasons": reasons,
         "indicators": indicators,
         "rsi": round(rsi_val, 1),
-        "macd_hist": round(hist, 4),
+        "macd_hist": round(hist, 4) if pd.notna(hist) else None,
         "close": round(close, 2),
     }
 
