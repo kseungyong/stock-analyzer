@@ -105,14 +105,35 @@ class RankingRow:
 
 
 def fetch_today(client: KISClient | None = None) -> list[RankingRow]:
-    """KIS 호출 1회 → 합산 순매수 상위 30 종목 (외인+기관 양쪽 정보 동시)."""
+    """KIS 2회 호출 → 순매수 상위 30 + 순매도 상위 30, symbol 기준 병합.
+
+    순매수(sort_code=0)만으로는 순매도 상위 종목이 DB 에 들어오지 않으므로
+    순매도(sort_code=1)도 함께 수집. 두 응답에 같은 종목이 있어도 KIS 는 실제
+    투자자별 순매수 값을 동일하게 돌려주므로 symbol 기준 dedup 만 하면 된다.
+    """
+    def _fetch(c: KISClient) -> tuple[list[dict], list[dict]]:
+        return (
+            c.fetch_foreign_institution_total(sort_code="0"),
+            c.fetch_foreign_institution_total(sort_code="1"),
+        )
+
     if client is None:
         with KISClient() as c:
-            raw = c.fetch_foreign_institution_total(sort_code="0")
+            buy, sell = _fetch(c)
     else:
-        raw = client.fetch_foreign_institution_total(sort_code="0")
-    rows = [RankingRow.from_kis(r) for r in raw if r.get("mksc_shrn_iscd")]
-    logger.info("KIS foreign-institution-total — %d rows", len(rows))
+        buy, sell = _fetch(client)
+
+    merged: dict[str, RankingRow] = {}
+    for raw in (*buy, *sell):
+        if not raw.get("mksc_shrn_iscd"):
+            continue
+        row = RankingRow.from_kis(raw)
+        merged[row.symbol] = row  # 양쪽에 있어도 값 동일 → 마지막이 이김
+    rows = list(merged.values())
+    logger.info(
+        "KIS foreign-institution-total — buy=%d sell=%d merged=%d",
+        len(buy), len(sell), len(rows),
+    )
     return rows
 
 
@@ -144,13 +165,23 @@ def top_n_by_investor(
     *,
     period_days: int = 1,
     n: int = 10,
+    direction: str = "buy",
 ) -> list[dict]:
     """투자자별 top N. period_days=1 일별, period_days=5 5일 누적.
 
-    Returns list of {symbol, name, qty, val} sorted by val desc.
+    direction="buy"  → 순매수 상위 (val > 0, 내림차순)
+    direction="sell" → 순매도 상위 (val < 0, 오름차순 = 가장 많이 판 종목 먼저)
+
+    Returns list of {symbol, name, qty, val}.
     """
     if investor not in INVESTORS:
         raise ValueError(f"unknown investor: {investor}")
+    if direction == "buy":
+        having, order = "val > 0", "val DESC"
+    elif direction == "sell":
+        having, order = "val < 0", "val ASC"
+    else:
+        raise ValueError(f"unknown direction: {direction}")
     prefix, _label = INVESTORS[investor]
     qty_col, val_col = f"{prefix}_qty", f"{prefix}_val"
 
@@ -165,8 +196,8 @@ def top_n_by_investor(
             f"FROM foreign_ranking_history "
             f"WHERE snap_date BETWEEN ? AND ? "
             f"GROUP BY symbol "
-            f"HAVING val > 0 "
-            f"ORDER BY val DESC LIMIT ?",
+            f"HAVING {having} "
+            f"ORDER BY {order} LIMIT ?",
             (start, end, n),
         )
         return [{"symbol": s, "name": nm, "qty": int(q or 0), "val": int(v or 0)}

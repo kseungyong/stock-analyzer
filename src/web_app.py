@@ -2534,13 +2534,16 @@ def foreign_ranking_view():
         )
 
     snap = _date.fromisoformat(latest)
-    rankings: dict[str, dict[str, list[dict]]] = {}
+    rankings: dict[str, dict] = {}
     for investor_key, (_prefix, label) in fr.INVESTORS.items():
-        rankings[investor_key] = {
-            "label": label,
-            "daily": fr.top_n_by_investor(snap, investor_key, period_days=1, n=10),
-            "weekly": fr.top_n_by_investor(snap, investor_key, period_days=5, n=10),
-        }
+        rankings[investor_key] = {"label": label}
+        for direction in ("buy", "sell"):
+            rankings[investor_key][direction] = {
+                "daily": fr.top_n_by_investor(
+                    snap, investor_key, period_days=1, n=10, direction=direction),
+                "weekly": fr.top_n_by_investor(
+                    snap, investor_key, period_days=5, n=10, direction=direction),
+            }
     return render_template(
         "foreign_ranking.html",
         latest_date=latest,

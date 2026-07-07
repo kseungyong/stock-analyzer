@@ -50,6 +50,12 @@ td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; 
   padding: 10px 14px; border-radius: 4px; margin-bottom: 20px;
   font-size: 13px; color: #1E3A8A;
 }
+.section {
+  font-size: 17px; margin: 28px 0 14px; padding-left: 10px;
+  border-left: 4px solid #94A3B8;
+}
+.section.buy { border-left-color: #16A34A; }
+.section.sell { border-left-color: #DC2626; }
 </style>
 </head>
 <body>
@@ -62,7 +68,7 @@ td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; 
 </div>
 
 <div class="container">
-  <h1>외인/기관/연기금 순매수 ranking</h1>
+  <h1>외인/기관/연기금 순매수·순매도 ranking</h1>
 
   {% if not latest_date %}
     <div class="legend">
@@ -77,26 +83,28 @@ td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; 
       &nbsp;·&nbsp; 매일 16:00 KST 갱신
     </div>
     <div class="legend">
-      <strong>일별</strong> = 가장 최근 영업일 1일 순매수.
-      <strong>5일 누적</strong> = 최근 5영업일 합산 순매수.
+      <strong>일별</strong> = 가장 최근 영업일 1일. <strong>5일 누적</strong> = 최근 5영업일 합산.
+      <strong>순매수</strong>(+, 초록) = 사들인 상위, <strong>순매도</strong>(−, 빨강) = 팔아치운 상위.
       <strong>거래대금 단위: 백만원</strong>, 수량: 주. 종목명 클릭 시 개별 분석 페이지로 이동.
     </div>
 
+    {% for direction, dir_label in [('buy', '순매수'), ('sell', '순매도')] %}
+    <h2 class="section {{ direction }}">{{ dir_label }} 상위</h2>
     <div class="grid">
     {% for investor_key, data in rankings.items() %}
       {% for period in ['daily', 'weekly'] %}
       <div class="card">
         <h3>
-          {{ data.label }} 순매수 상위 10
+          {{ data.label }} {{ dir_label }} 상위 10
           <span class="period">— {{ '일별' if period == 'daily' else '5일 누적' }}</span>
         </h3>
-        {% set rows = data[period] %}
+        {% set rows = data[direction][period] %}
         {% if rows %}
         <table>
           <thead>
             <tr>
               <th></th><th>종목</th><th style="text-align:right">거래대금 (백만원)</th>
-              <th style="text-align:right">순매수량 (주)</th>
+              <th style="text-align:right">{{ dir_label }}량 (주)</th>
             </tr>
           </thead>
           <tbody>
@@ -122,6 +130,7 @@ td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; 
       {% endfor %}
     {% endfor %}
     </div>
+    {% endfor %}
   {% endif %}
 </div>
 </body>

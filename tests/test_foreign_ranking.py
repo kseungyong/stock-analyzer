@@ -108,6 +108,76 @@ class TestDB:
         top = fr.top_n_by_investor(snap, "foreign", period_days=1, n=5)
         assert [r["symbol"] for r in top] == ["A"]
 
+    def test_sell_direction_ranks_most_negative_first(self, _tmp_db):
+        snap = date_cls(2026, 6, 1)
+        fr.save_snapshot(snap, [
+            fr.RankingRow("A", "AlphaCo", 0, 500, 0, 0, 0, 0),    # 순매수 — sell 제외
+            fr.RankingRow("C", "GammaCo", 0, -100, 0, 0, 0, 0),   # 순매도 -100
+            fr.RankingRow("D", "DeltaCo", 0, -300, 0, 0, 0, 0),   # 순매도 -300 (더 많이 팜)
+        ])
+        sell = fr.top_n_by_investor(
+            snap, "foreign", period_days=1, n=5, direction="sell")
+        # 가장 많이 판 종목 먼저: D(-300) > C(-100), 순매수 A 는 제외
+        assert [r["symbol"] for r in sell] == ["D", "C"]
+        assert sell[0]["val"] == -300
+        # buy 방향은 여전히 A 만
+        buy = fr.top_n_by_investor(
+            snap, "foreign", period_days=1, n=5, direction="buy")
+        assert [r["symbol"] for r in buy] == ["A"]
+
+    def test_invalid_direction_raises(self, _tmp_db):
+        with pytest.raises(ValueError):
+            fr.top_n_by_investor(date_cls(2026, 6, 1), "foreign", direction="hold")
+
+
+class TestFetchToday:
+    def test_merges_buy_and_sell_snapshots(self):
+        buy = [{
+            "mksc_shrn_iscd": "005930", "hts_kor_isnm": "삼성전자",
+            "frgn_ntby_qty": "100", "frgn_ntby_tr_pbmn": "500",
+            "orgn_ntby_qty": "0", "orgn_ntby_tr_pbmn": "0",
+            "fund_ntby_qty": "0", "fund_ntby_tr_pbmn": "0",
+        }]
+        sell = [{
+            "mksc_shrn_iscd": "034220", "hts_kor_isnm": "LG디스플레이",
+            "frgn_ntby_qty": "-200", "frgn_ntby_tr_pbmn": "-800",
+            "orgn_ntby_qty": "0", "orgn_ntby_tr_pbmn": "0",
+            "fund_ntby_qty": "0", "fund_ntby_tr_pbmn": "0",
+        }]
+
+        class _FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def fetch_foreign_institution_total(self, *, sort_code="0"):
+                self.calls.append(sort_code)
+                return buy if sort_code == "0" else sell
+
+        client = _FakeClient()
+        rows = fr.fetch_today(client=client)
+        # 순매수(0) + 순매도(1) 두 번 호출
+        assert client.calls == ["0", "1"]
+        by_symbol = {r.symbol: r for r in rows}
+        assert set(by_symbol) == {"005930", "034220"}
+        assert by_symbol["005930"].frgn_val == 500
+        assert by_symbol["034220"].frgn_val == -800
+
+    def test_dedupes_symbol_present_in_both(self):
+        row = {
+            "mksc_shrn_iscd": "005930", "hts_kor_isnm": "삼성전자",
+            "frgn_ntby_qty": "100", "frgn_ntby_tr_pbmn": "500",
+            "orgn_ntby_qty": "-5", "orgn_ntby_tr_pbmn": "-30",
+            "fund_ntby_qty": "0", "fund_ntby_tr_pbmn": "0",
+        }
+
+        class _FakeClient:
+            def fetch_foreign_institution_total(self, *, sort_code="0"):
+                return [dict(row)]  # 양쪽 응답에 동일 종목
+
+        rows = fr.fetch_today(client=_FakeClient())
+        assert len(rows) == 1
+        assert rows[0].symbol == "005930" and rows[0].frgn_val == 500
+
 
 class TestUniverseFollow:
     def test_push_writes_overlay_and_skips_user_entries(
