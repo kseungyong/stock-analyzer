@@ -1450,3 +1450,67 @@ class TestPortfolioSync:
     def test_csrf_missing_returns_403(self, client):
         resp = client.post("/portfolio/sync", data={})
         assert resp.status_code == 403
+
+
+class TestPortfolioMarketStats:
+    """_portfolio_market_stats — 시장별 집계 (자본가중 평균수익률).
+
+    평균수익률 = 손익합계 / 투자원금합계 × 100. 종목별 % 의 단순평균이 아니라
+    자본 비중을 반영한다 (손익·평가 배너와 정확히 일치해야 함).
+    """
+
+    def _row(self, avg_price, qty, last_close):
+        pnl_pct = None if last_close is None else (last_close - avg_price) / avg_price * 100
+        pnl_abs = None if last_close is None else (last_close - avg_price) * qty
+        return {
+            "avg_price": avg_price, "qty": qty, "last_close": last_close,
+            "pnl_pct": pnl_pct, "pnl_abs": pnl_abs,
+        }
+
+    def test_weighted_not_simple_mean(self):
+        import src.web_app as wa
+        # A: 투자 1000만 +1%, B: 투자 10만 +50%. 단순평균이면 +25.5% (틀림).
+        rows = [self._row(100_000, 100, 101_000), self._row(1_000, 100, 1_500)]
+        stats = wa._portfolio_market_stats(rows)
+        # 자본가중 = 150,000 / 10,100,000 × 100 = 1.485%
+        assert stats["avg"] == pytest.approx(150_000 / 10_100_000 * 100)
+        assert stats["avg"] < 2.0  # 단순평균(25.5%)과 명백히 다름
+        assert stats["pnl_amt"] == pytest.approx(150_000)
+        assert stats["eval_amt"] == pytest.approx(101_000 * 100 + 1_500 * 100)
+
+    def test_equal_cost_matches_simple_mean(self):
+        import src.web_app as wa
+        # 원금 동일 → 가중평균 == 단순평균 (sanity)
+        rows = [self._row(1_000, 100, 1_100), self._row(1_000, 100, 900)]  # +10%, -10%
+        stats = wa._portfolio_market_stats(rows)
+        assert stats["avg"] == pytest.approx(0.0)
+
+    def test_weighted_return_matches_pnl_over_cost(self):
+        import src.web_app as wa
+        rows = [self._row(5_000, 10, 6_000), self._row(20_000, 3, 19_000)]
+        stats = wa._portfolio_market_stats(rows)
+        cost = 5_000 * 10 + 20_000 * 3
+        assert stats["avg"] == pytest.approx(stats["pnl_amt"] / cost * 100)
+
+    def test_unpriced_holdings_excluded(self):
+        import src.web_app as wa
+        # last_close None 종목은 평가·손익·평균 모두에서 제외 (동일 집합)
+        rows = [self._row(1_000, 100, 1_200), self._row(9_999, 50, None)]
+        stats = wa._portfolio_market_stats(rows)
+        assert stats["eval_amt"] == pytest.approx(1_200 * 100)
+        assert stats["pnl_amt"] == pytest.approx(200 * 100)
+        assert stats["avg"] == pytest.approx((200 * 100) / (1_000 * 100) * 100)
+
+    def test_all_unpriced_returns_none_avg(self):
+        import src.web_app as wa
+        rows = [self._row(1_000, 100, None)]
+        stats = wa._portfolio_market_stats(rows)
+        assert stats["avg"] is None
+        assert stats["eval_amt"] == 0
+        assert stats["pnl_amt"] == 0
+
+    def test_empty_rows(self):
+        import src.web_app as wa
+        stats = wa._portfolio_market_stats([])
+        assert stats["avg"] is None
+        assert stats["eval_amt"] == 0 and stats["pnl_amt"] == 0

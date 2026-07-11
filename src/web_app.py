@@ -3026,6 +3026,24 @@ def _portfolio_card(h: dict, now_ts: int, name_map: dict[str, str],
     </div>"""
 
 
+def _portfolio_market_stats(rows: list[dict]) -> dict:
+    """시장별 포트폴리오 집계 — 평가액, 손익, 자본가중 평균수익률.
+
+    평균수익률 = 손익합계 / 투자원금합계 × 100. 종목별 % 수익률의 단순평균이
+    아니라 투자 비중을 반영한다 (단순평균은 소액·고수익 종목이 전체를 왜곡).
+    이렇게 하면 같은 카드의 손익·평가 배너와 정확히 일치한다.
+
+    last_close(=분석 결과) 없는 종목은 평가·손익·평균 세 집계 모두에서 동일하게
+    제외한다.
+    """
+    priced = [h for h in rows if h.get("last_close") is not None]
+    eval_amt = sum(h["last_close"] * h["qty"] for h in priced)
+    pnl_amt = sum(h["pnl_abs"] for h in priced if h.get("pnl_abs") is not None)
+    cost_basis = sum(h["avg_price"] * h["qty"] for h in priced)
+    avg = (pnl_amt / cost_basis * 100) if cost_basis else None
+    return {"eval_amt": eval_amt, "pnl_amt": pnl_amt, "avg": avg}
+
+
 @app.route("/portfolio")
 def portfolio_view():
     sort_key = request.args.get("sort", "pnl_pct")
@@ -3066,12 +3084,10 @@ def portfolio_view():
         rows = by_market.get(market) or []
         if not rows:
             return ""
-        eval_amt = sum((h["last_close"] * h["qty"]) for h in rows
-                       if h.get("last_close") is not None)
-        pnl_amt = sum(h["pnl_abs"] for h in rows
-                      if h.get("pnl_abs") is not None)
-        pcts = [h["pnl_pct"] for h in rows if h.get("pnl_pct") is not None]
-        avg = (sum(pcts) / len(pcts)) if pcts else None
+        stats = _portfolio_market_stats(rows)
+        eval_amt = stats["eval_amt"]
+        pnl_amt = stats["pnl_amt"]
+        avg = stats["avg"]
         eval_str = _format_price(eval_amt, market) if eval_amt else "—"
         pnl_str = _format_signed(pnl_amt, market, currency=True) if pnl_amt else "—"
         avg_str = _format_signed(avg, None) if avg is not None else "—"
