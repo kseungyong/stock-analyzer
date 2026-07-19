@@ -52,6 +52,11 @@ CREATE INDEX IF NOT EXISTS idx_fr_date ON foreign_ranking_history(snap_date);
 
 _db_lock = threading.Lock()
 
+# KIS foreign-institution-total 이 간헐적으로 500 을 돌려준다 (2026-07-08~17 실측,
+# 특히 순매도 sort_code=1). 재시도 후에도 실패하면 해당 방향만 포기하고 진행.
+_FETCH_RETRIES = 2
+_FETCH_RETRY_DELAY = 2.0  # seconds
+
 
 @contextmanager
 def _db_conn():
@@ -104,18 +109,38 @@ class RankingRow:
         )
 
 
+def _fetch_sorted(c: KISClient, sort_code: str) -> list[dict] | None:
+    """단일 sort_code 호출 + 재시도. 최종 실패 시 None (호출측에서 방향별 degrade)."""
+    import time
+
+    for attempt in range(_FETCH_RETRIES + 1):
+        try:
+            return c.fetch_foreign_institution_total(sort_code=sort_code)
+        except Exception as e:
+            if attempt < _FETCH_RETRIES:
+                logger.warning(
+                    "KIS sort_code=%s 실패 (attempt %d/%d): %s — 재시도",
+                    sort_code, attempt + 1, _FETCH_RETRIES + 1, e,
+                )
+                time.sleep(_FETCH_RETRY_DELAY)
+            else:
+                logger.error("KIS sort_code=%s 최종 실패: %s", sort_code, e)
+    return None
+
+
 def fetch_today(client: KISClient | None = None) -> list[RankingRow]:
     """KIS 2회 호출 → 순매수 상위 30 + 순매도 상위 30, symbol 기준 병합.
 
     순매수(sort_code=0)만으로는 순매도 상위 종목이 DB 에 들어오지 않으므로
     순매도(sort_code=1)도 함께 수집. 두 응답에 같은 종목이 있어도 KIS 는 실제
     투자자별 순매수 값을 동일하게 돌려주므로 symbol 기준 dedup 만 하면 된다.
+
+    한쪽 방향이 재시도 후에도 실패하면 그 방향만 빼고 진행한다 — 잡 전체가
+    죽어 그날 스냅샷이 통째로 유실되는 것보다 절반이라도 저장하는 편이 낫다.
+    양쪽 모두 실패하면 RuntimeError.
     """
-    def _fetch(c: KISClient) -> tuple[list[dict], list[dict]]:
-        return (
-            c.fetch_foreign_institution_total(sort_code="0"),
-            c.fetch_foreign_institution_total(sort_code="1"),
-        )
+    def _fetch(c: KISClient) -> tuple[list[dict] | None, list[dict] | None]:
+        return _fetch_sorted(c, "0"), _fetch_sorted(c, "1")
 
     if client is None:
         with KISClient() as c:
@@ -123,8 +148,17 @@ def fetch_today(client: KISClient | None = None) -> list[RankingRow]:
     else:
         buy, sell = _fetch(client)
 
+    if buy is None and sell is None:
+        raise RuntimeError("KIS foreign-institution-total 순매수/순매도 모두 실패")
+    if buy is None or sell is None:
+        logger.warning(
+            "KIS 한쪽 방향만 수집됨 — buy=%s sell=%s",
+            "OK" if buy is not None else "FAIL",
+            "OK" if sell is not None else "FAIL",
+        )
+
     merged: dict[str, RankingRow] = {}
-    for raw in (*buy, *sell):
+    for raw in (*(buy or []), *(sell or [])):
         if not raw.get("mksc_shrn_iscd"):
             continue
         row = RankingRow.from_kis(raw)
@@ -132,7 +166,7 @@ def fetch_today(client: KISClient | None = None) -> list[RankingRow]:
     rows = list(merged.values())
     logger.info(
         "KIS foreign-institution-total — buy=%d sell=%d merged=%d",
-        len(buy), len(sell), len(rows),
+        len(buy or []), len(sell or []), len(rows),
     )
     return rows
 

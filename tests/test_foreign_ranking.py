@@ -186,6 +186,62 @@ class TestFetchToday:
         assert by_symbol["005930"].frgn_val == 500
         assert by_symbol["034220"].frgn_val == -800
 
+    def test_partial_failure_keeps_other_direction(self, monkeypatch):
+        # KIS 순매도(sort_code=1) 호출이 500 으로 죽어도 순매수 데이터는 저장돼야 한다
+        # (실측: 2026-07-08~17 간헐 500 으로 스냅샷 통유실).
+        monkeypatch.setattr(fr, "_FETCH_RETRY_DELAY", 0.0)
+        buy = [{
+            "mksc_shrn_iscd": "005930", "hts_kor_isnm": "삼성전자",
+            "frgn_ntby_qty": "100", "frgn_ntby_tr_pbmn": "500",
+            "orgn_ntby_qty": "0", "orgn_ntby_tr_pbmn": "0",
+            "fund_ntby_qty": "0", "fund_ntby_tr_pbmn": "0",
+        }]
+
+        class _FakeClient:
+            def fetch_foreign_institution_total(self, *, sort_code="0"):
+                if sort_code == "1":
+                    raise RuntimeError("KIS 500")
+                return buy
+
+        rows = fr.fetch_today(client=_FakeClient())
+        assert [r.symbol for r in rows] == ["005930"]
+
+    def test_transient_failure_recovers_on_retry(self, monkeypatch):
+        monkeypatch.setattr(fr, "_FETCH_RETRY_DELAY", 0.0)
+        row = {
+            "mksc_shrn_iscd": "034220", "hts_kor_isnm": "LG디스플레이",
+            "frgn_ntby_qty": "-200", "frgn_ntby_tr_pbmn": "-800",
+            "orgn_ntby_qty": "0", "orgn_ntby_tr_pbmn": "0",
+            "fund_ntby_qty": "0", "fund_ntby_tr_pbmn": "0",
+        }
+
+        class _FlakyClient:
+            def __init__(self):
+                self.sell_calls = 0
+
+            def fetch_foreign_institution_total(self, *, sort_code="0"):
+                if sort_code == "1":
+                    self.sell_calls += 1
+                    if self.sell_calls == 1:
+                        raise RuntimeError("KIS 500 transient")
+                    return [dict(row)]
+                return []
+
+        client = _FlakyClient()
+        rows = fr.fetch_today(client=client)
+        assert client.sell_calls == 2  # 1차 실패 → 재시도 성공
+        assert [r.symbol for r in rows] == ["034220"]
+
+    def test_both_directions_failing_raises(self, monkeypatch):
+        monkeypatch.setattr(fr, "_FETCH_RETRY_DELAY", 0.0)
+
+        class _DeadClient:
+            def fetch_foreign_institution_total(self, *, sort_code="0"):
+                raise RuntimeError("KIS down")
+
+        with pytest.raises(RuntimeError):
+            fr.fetch_today(client=_DeadClient())
+
     def test_dedupes_symbol_present_in_both(self):
         row = {
             "mksc_shrn_iscd": "005930", "hts_kor_isnm": "삼성전자",
