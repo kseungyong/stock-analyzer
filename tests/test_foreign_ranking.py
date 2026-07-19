@@ -99,6 +99,30 @@ class TestDB:
         assert top[0]["symbol"] == "B" and top[0]["val"] == 1000
         assert top[1]["symbol"] == "A" and top[1]["val"] == 500
 
+    def test_period_counts_snapshots_not_calendar_days(self, _tmp_db):
+        # 주말 갭: 수목금 + 월화 = 5영업일이 7캘린더일에 걸침.
+        # period_days=5 는 캘린더 범위가 아니라 최근 5개 스냅샷을 합산해야 한다.
+        days = [date_cls(2026, 6, 3), date_cls(2026, 6, 4), date_cls(2026, 6, 5),
+                date_cls(2026, 6, 8), date_cls(2026, 6, 9)]
+        for d in days:
+            fr.save_snapshot(d, [fr.RankingRow("A", "AlphaCo", 0, 100, 0, 0, 0, 0)])
+        # snap 이후 날짜는 포함되면 안 됨
+        fr.save_snapshot(date_cls(2026, 6, 10),
+                         [fr.RankingRow("A", "AlphaCo", 0, 999, 0, 0, 0, 0)])
+
+        top = fr.top_n_by_investor(date_cls(2026, 6, 9), "foreign",
+                                   period_days=5, n=5)
+        assert top[0]["symbol"] == "A" and top[0]["val"] == 500
+
+    def test_10day_aggregation_uses_latest_10_snapshots(self, _tmp_db):
+        snap = date_cls(2026, 6, 30)
+        # 12영업일치 저장 — 최근 10개만 합산되어야 함 (100 × 10 = 1000)
+        for i in range(12):
+            d = snap - timedelta(days=11 - i)
+            fr.save_snapshot(d, [fr.RankingRow("A", "AlphaCo", 0, 100, 0, 0, 0, 0)])
+        top = fr.top_n_by_investor(snap, "foreign", period_days=10, n=5)
+        assert top[0]["val"] == 1000
+
     def test_negative_val_filtered_out(self, _tmp_db):
         snap = date_cls(2026, 6, 1)
         fr.save_snapshot(snap, [

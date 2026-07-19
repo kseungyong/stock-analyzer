@@ -83,7 +83,7 @@ td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; 
       &nbsp;·&nbsp; 매일 16:00 KST 갱신
     </div>
     <div class="legend">
-      <strong>일별</strong> = 가장 최근 영업일 1일. <strong>5일 누적</strong> = 최근 5영업일 합산.
+      <strong>일별</strong> = 가장 최근 영업일 1일. <strong>5일/10일 누적</strong> = 최근 5/10영업일 합산.
       <strong>순매수</strong>(+, 초록) = 사들인 상위, <strong>순매도</strong>(−, 빨강) = 팔아치운 상위.
       <strong>거래대금 단위: 백만원</strong>, 수량: 주. 종목명 클릭 시 개별 분석 페이지로 이동.
     </div>
@@ -92,11 +92,11 @@ td.qty { text-align: right; color: #64748B; font-variant-numeric: tabular-nums; 
     <h2 class="section {{ direction }}">{{ dir_label }} 상위</h2>
     <div class="grid">
     {% for investor_key, data in rankings.items() %}
-      {% for period in ['daily', 'weekly'] %}
+      {% for period, period_label in [('daily', '일별'), ('weekly', '5일 누적'), ('biweekly', '10일 누적')] %}
       <div class="card">
         <h3>
           {{ data.label }} {{ dir_label }} 상위 10
-          <span class="period">— {{ '일별' if period == 'daily' else '5일 누적' }}</span>
+          <span class="period">— {{ period_label }}</span>
         </h3>
         {% set rows = data[direction][period] %}
         {% if rows %}

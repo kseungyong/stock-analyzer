@@ -167,7 +167,10 @@ def top_n_by_investor(
     n: int = 10,
     direction: str = "buy",
 ) -> list[dict]:
-    """투자자별 top N. period_days=1 일별, period_days=5 5일 누적.
+    """투자자별 top N. period_days=N → snap 이하 최근 N개 snap_date(영업일) 합산.
+
+    스냅샷은 영업일에만 쌓이므로 캘린더 날짜 범위가 아니라 최근 N개
+    snap_date 를 골라 합산한다 (주말/휴장일 갭 무관).
 
     direction="buy"  → 순매수 상위 (val > 0, 내림차순)
     direction="sell" → 순매도 상위 (val < 0, 오름차순 = 가장 많이 판 종목 먼저)
@@ -185,20 +188,18 @@ def top_n_by_investor(
     prefix, _label = INVESTORS[investor]
     qty_col, val_col = f"{prefix}_qty", f"{prefix}_val"
 
-    from datetime import timedelta
-    start = (snap - timedelta(days=period_days - 1)).isoformat()
-    end = snap.isoformat()
-
     with _db_conn() as conn:
         cur = conn.execute(
             f"SELECT symbol, MAX(name) AS name, "
             f"       SUM({qty_col}) AS qty, SUM({val_col}) AS val "
             f"FROM foreign_ranking_history "
-            f"WHERE snap_date BETWEEN ? AND ? "
+            f"WHERE snap_date IN ("
+            f"  SELECT DISTINCT snap_date FROM foreign_ranking_history "
+            f"  WHERE snap_date <= ? ORDER BY snap_date DESC LIMIT ?) "
             f"GROUP BY symbol "
             f"HAVING {having} "
             f"ORDER BY {order} LIMIT ?",
-            (start, end, n),
+            (snap.isoformat(), period_days, n),
         )
         return [{"symbol": s, "name": nm, "qty": int(q or 0), "val": int(v or 0)}
                 for s, nm, q, v in cur.fetchall()]

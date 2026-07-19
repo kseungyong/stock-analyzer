@@ -2507,10 +2507,10 @@ def leaders_list():
 
 @app.route("/foreign-ranking")
 def foreign_ranking_view():
-    """GET /foreign-ranking — 외인/기관/연기금 순매수 ranking (일별 + 5일 누적).
+    """GET /foreign-ranking — 외인/기관/연기금 순매수 ranking (일별 + 5일/10일 누적).
 
     데이터 소스: foreign_ranking_history 테이블 (KIS API → 매일 16:00 launchd).
-    최신 snap_date 기준 일별/5일 ranking 을 3 투자자 × 2 기간 = 6 표로 표시.
+    최신 snap_date 기준 일별/5일/10일 ranking 을 3 투자자 × 3 기간으로 표시.
     """
     from datetime import date as _date
     from src import foreign_ranking as fr
@@ -2543,6 +2543,8 @@ def foreign_ranking_view():
                     snap, investor_key, period_days=1, n=10, direction=direction),
                 "weekly": fr.top_n_by_investor(
                     snap, investor_key, period_days=5, n=10, direction=direction),
+                "biweekly": fr.top_n_by_investor(
+                    snap, investor_key, period_days=10, n=10, direction=direction),
             }
     return render_template(
         "foreign_ranking.html",
