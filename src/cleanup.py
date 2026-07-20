@@ -31,6 +31,46 @@ _MIN_HISTORY_ROWS = 5
 _SAFETY_LIMIT = 10
 
 
+def rotate_logs(
+    logs_dir: Path | str,
+    *,
+    max_bytes: int = 10_000_000,
+    keep_tail: int = 1_000_000,
+) -> dict:
+    """logs_dir 의 파일이 max_bytes 초과 시 tail keep_tail 만 <name>.1 로 남기고 truncate.
+
+    launchd/gunicorn 이 로그 fd 를 O_APPEND 로 연 채 유지하므로 rename 로테이션은
+    안 된다 (rename 후에도 기존 inode 에 계속 쓰고 새 파일이 안 생김) — in-place
+    truncate 는 append fd 와 안전하게 공존한다. `.1` 백업은 매번 덮어쓰며 자신은
+    로테이션 대상에서 제외된다.
+
+    Returns: {"rotated": [파일명, ...]}
+    """
+    rotated: list[str] = []
+    logs_dir = Path(logs_dir)
+    if not logs_dir.is_dir():
+        return {"rotated": rotated}
+    for f in sorted(logs_dir.iterdir()):
+        if not f.is_file() or f.name.endswith(".1"):
+            continue
+        try:
+            size = f.stat().st_size
+            if size <= max_bytes:
+                continue
+            with open(f, "rb") as fh:
+                fh.seek(max(0, size - keep_tail))
+                tail = fh.read()
+            (logs_dir / (f.name + ".1")).write_bytes(tail)
+            with open(f, "r+b") as fh:
+                fh.truncate(0)
+            rotated.append(f.name)
+            logger.info("log rotate: %s %.1fMB → 0 (tail %.1fMB 백업)",
+                        f.name, size / 1e6, len(tail) / 1e6)
+        except OSError as e:
+            logger.warning("log rotate 실패 %s: %s", f.name, e)
+    return {"rotated": rotated}
+
+
 def is_etf(symbol: str, name: str) -> bool:
     """ETF/인덱스 식별. symbol 화이트리스트 또는 name prefix 매칭."""
     sym_upper = symbol.upper()

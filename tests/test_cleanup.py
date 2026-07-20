@@ -279,3 +279,43 @@ class TestApply:
         assert yaml_path.read_text(encoding="utf-8") == original
         assert not log_path.exists()
         mock_git.assert_not_called()
+
+
+class TestRotateLogs:
+    def test_truncates_oversized_and_keeps_tail(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        big = logs / "web.err.log"
+        big.write_bytes(b"A" * 1000 + b"TAIL-MARKER\n")
+        small = logs / "web.out.log"
+        small.write_bytes(b"small\n")
+
+        result = cleanup.rotate_logs(logs, max_bytes=500, keep_tail=100)
+
+        # 초과 파일: .1 백업 생성 + 원본 truncate(빈 파일 유지 — 열린 fd 안전)
+        assert big.stat().st_size == 0
+        backup = logs / "web.err.log.1"
+        assert backup.exists()
+        tail = backup.read_bytes()
+        assert len(tail) <= 100 and tail.endswith(b"TAIL-MARKER\n")
+        # 미달 파일은 건드리지 않음
+        assert small.read_bytes() == b"small\n"
+        assert result == {"rotated": ["web.err.log"]}
+
+    def test_overwrites_previous_backup(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "x.log").write_bytes(b"B" * 600)
+        (logs / "x.log.1").write_bytes(b"old-backup")
+        cleanup.rotate_logs(logs, max_bytes=500, keep_tail=100)
+        assert (logs / "x.log.1").read_bytes() == b"B" * 100
+
+    def test_missing_dir_noop(self, tmp_path):
+        assert cleanup.rotate_logs(tmp_path / "nope") == {"rotated": []}
+
+    def test_backup_files_not_rotated_again(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "y.log.1").write_bytes(b"C" * 60_000_000 if False else b"C" * 600)
+        result = cleanup.rotate_logs(logs, max_bytes=500, keep_tail=100)
+        assert result == {"rotated": []}  # .1 백업은 로테이션 대상 제외

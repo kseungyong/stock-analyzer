@@ -534,6 +534,11 @@ def main():
             dry_run=args.dry_run,
         )
         logger.info("cleanup 결과: %s", result)
+
+        # 로그 로테이션 — launchd StandardErrorPath 는 무한 append 라 주기 정리 필요
+        if not args.dry_run:
+            rotated = _cleanup.rotate_logs(Path(__file__).parent / "logs")
+            logger.info("log rotate 결과: %s", rotated)
         return
 
     if args.command == "dart-refresh":
