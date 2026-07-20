@@ -137,3 +137,21 @@ class TestPredictionCache:
         df = _make_df(n=120)
         run_prediction(df)  # cache_key 미지정
         assert len(_prediction_cache) == 0
+
+
+class TestNoFeatureNameWarnings:
+    def test_lgbm_predict_emits_no_sklearn_feature_warning(self):
+        # web.err.log 를 24k 회 채우던 "X does not have valid feature names" 경고 —
+        # fit/predict 입력을 feature name 있는 DataFrame 으로 통일해 원천 제거.
+        import warnings
+        from src import ml_predictor as mlp
+        rng = np.random.default_rng(0)
+        n = 200
+        df = pd.DataFrame({f: rng.random(n) for f in mlp._CLF_FEATURES})
+        df["Close"] = 100 + rng.normal(0, 1, n).cumsum()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = mlp.predict_direction_lgbm(df)
+        assert out["direction"] in ("상승", "하락")
+        feature_warnings = [w for w in caught if "feature names" in str(w.message)]
+        assert feature_warnings == []

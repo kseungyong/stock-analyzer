@@ -66,6 +66,8 @@ def walk_forward(symbol: str, df: pd.DataFrame, days: int = 126) -> dict:
         if prepared is None:
             continue
         X_train, _, y_train, _, _ = prepared
+        # feature name 있는 DataFrame 으로 통일 (ml_predictor 와 동일 — 경고 방지)
+        X_train = pd.DataFrame(X_train, columns=_CLF_FEATURES)
 
         try:
             rf = RandomForestClassifier(n_estimators=100, random_state=42)
@@ -83,7 +85,7 @@ def walk_forward(symbol: str, df: pd.DataFrame, days: int = 126) -> dict:
         row_t = df.iloc[t]
         if row_t[_CLF_FEATURES].isna().any():
             continue
-        x_t = row_t[_CLF_FEATURES].values.reshape(1, -1)
+        x_t = pd.DataFrame([row_t[_CLF_FEATURES].values], columns=_CLF_FEATURES)
 
         rf_pred = rf.predict(x_t)[0]
         rf_conf = float(rf.predict_proba(x_t)[0].max() * 100)

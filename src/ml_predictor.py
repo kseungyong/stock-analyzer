@@ -157,6 +157,12 @@ def predict_direction_lgbm(df: pd.DataFrame) -> dict:
     if prepared is None:
         return {"direction": "데이터 부족", "confidence": 0.0}
     X_train, X_test, y_train, y_test, X = prepared
+    # fit/predict 입력을 feature name 있는 DataFrame 으로 통일 — numpy 를 섞으면
+    # sklearn 이 predict 마다 "X does not have valid feature names" 경고를 찍어
+    # 로그를 채운다 (web.err.log 24k 회 실측).
+    X_train = pd.DataFrame(X_train, columns=_CLF_FEATURES)
+    X_test = pd.DataFrame(X_test, columns=_CLF_FEATURES)
+    x_last = pd.DataFrame(X[-1:], columns=_CLF_FEATURES)
     clf = LGBMClassifier(
         n_estimators=300, num_leaves=31, learning_rate=0.05,
         min_child_samples=20, random_state=42, verbose=-1,
@@ -168,8 +174,8 @@ def predict_direction_lgbm(df: pd.DataFrame) -> dict:
         callbacks = [lgb.early_stopping(30, verbose=False), lgb.log_evaluation(period=-1)]
     clf.fit(X_train, y_train, eval_set=eval_set, callbacks=callbacks)
     accuracy = clf.score(X_test, y_test) if len(X_test) > 0 else 0.0
-    proba = clf.predict_proba(X[-1].reshape(1, -1))[0]
-    pred = clf.predict(X[-1].reshape(1, -1))[0]
+    proba = clf.predict_proba(x_last)[0]
+    pred = clf.predict(x_last)[0]
     return {
         "direction": "상승" if pred == 1 else "하락",
         "confidence": round(float(max(proba)) * 100, 1),
